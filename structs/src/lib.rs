@@ -2,37 +2,52 @@ extern crate rmp_serde as rmps;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 
-pub const TYPE_REGISTER: u8 = 0;
-pub const TYPE_LOGIN: u8    = 1;
-pub const TYPE_MESSAGE: u8  = 2;
-pub const TYPE_COMMAND: u8  = 3;
+use std::io;
+use serde::Serialize;
+use rmps::Serializer;
 
-#[derive(Serialize, Desieralize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
-    #[serde(rename = "type")]
-    kind: u8,
     name: String,
     password: String
 }
-#[derive(Serialize, Desieralize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct User {
     id: usize,
     name: String,
     nick: Option<String>,
     roles: Vec<usize>
 }
-#[derive(Serialize, Desieralize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
-    #[serde(rename = "type")]
-    kind: u8,
     author: User,
     message: String
 }
-#[derive(Serialize, Desieralize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Command {
-    #[serde(rename = "type")]
-    kind: u8,
     author: User,
     command: String,
     args: Vec<String>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Packet {
+    Login(Login),
+    User(Login),
+    Message(Login),
+    Command(Login)
+}
+
+pub fn serialize(packet: Packet) -> Result<Vec<u8>, rmps::encode::Error> {
+    let mut buf = Vec::new();
+    packet.serialize(&mut Serializer::new(&mut buf))?;
+
+    Ok(buf)
+}
+pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
+    rmps::from_slice(buf)
+}
+pub fn deserialize_stream<T: io::Read>(buf: T) -> Result<Packet, rmps::decode::Error> {
+    rmps::from_read(buf)
 }
