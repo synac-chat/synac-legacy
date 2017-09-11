@@ -7,3 +7,4 @@ authors = ["jD91mZM2 <LEGOlord208@krake.one>"]
 futures      = "0.1.15"
 tokio-core   = "0.1.9"
 tokio-io     = "0.1.3"
+structs = { path = "../structs" }

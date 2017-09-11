@@ -34,9 +34,8 @@ pub struct Command {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Packet {
     Login(Login),
-    User(Login),
-    Message(Login),
-    Command(Login)
+    Message(Message),
+    Command(Command)
 }
 
 pub fn serialize(packet: Packet) -> Result<Vec<u8>, rmps::encode::Error> {

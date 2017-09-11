@@ -1,12 +1,14 @@
 extern crate futures;
+extern crate structs;
 extern crate tokio_core;
 extern crate tokio_io;
 
 use std::io::BufReader;
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
+use std::rc::Rc;
 use futures::Stream;
-use tokio_core::reactor::Core;
-use tokio_core::net::TcpListener;
+use tokio_core::reactor::{Core, Handle};
+use tokio_core::net::{TcpListener, TcpStream};
 use tokio_io::io;
 
 macro_rules! attempt_or {
@@ -28,18 +30,34 @@ fn main() {
         eprintln!("Is the port in use?");
         return;
     });
+    let rc = Rc::new(handle);
     let server = listener.incoming().for_each(|(conn, _)| {
-        let lines = io::lines(BufReader::new(conn))
-                        .map_err(|_| ())
-                        .for_each(|line| {
+        let bufreader = BufReader::new(conn);
+        read_until(rc.clone(), bufreader);
 
-
-            Ok(())
-        });
-
-        handle.spawn(lines);
         Ok(())
     });
 
     core.run(server).expect("Could not run tokio core!");
+}
+
+fn read_until(handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
+    use futures::Future;
+
+    let handle_clone = handle.clone();
+    let lines = io::read_until(bufreader, b'\n', Vec::new())
+        .and_then(move |(bufreader, mut bytes)| {
+            if bytes.is_empty() {
+                return Ok(());
+            }
+            bytes.pop();
+            println!("{:?}", bytes);
+            println!("Decoding: {:?}", structs::deserialize(&bytes));
+
+            read_until(handle_clone, bufreader);
+            Ok(())
+        })
+        .map_err(|_| ());
+
+    (*handle).spawn(lines);
 }
