@@ -31,7 +31,17 @@ macro_rules! attempt_or {
 }
 
 fn main() {
+    println!("TIP: You can change port by putting it as a command line argument.");
     println!("Setting up...");
+
+    let port = env::args().skip(1).next().map(|val| match val.parse() {
+        Ok(ok) => ok,
+        Err(_) => {
+            eprintln!("Warning: Supplied port is not a valid number.");
+            eprintln!("Using default.");
+            common::DEFAULT_PORT
+        }
+    }).unwrap_or(common::DEFAULT_PORT);
 
     let mut public = Vec::new();
     {
@@ -82,7 +92,7 @@ fn main() {
 
     let mut core = Core::new().expect("Could not start tokio core!");
     let handle = core.handle();
-    let listener = attempt_or!(TcpListener::bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1234), &handle), {
+    let listener = attempt_or!(TcpListener::bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port), &handle), {
         eprintln!("An error occured when binding TCP listener!");
         eprintln!("Is the port in use?");
         return;

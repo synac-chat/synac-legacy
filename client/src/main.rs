@@ -1,10 +1,15 @@
+extern crate openssl;
 extern crate rustyline;
 extern crate termion;
+extern crate common;
 
 mod parser;
 
+use openssl::ssl::{SslMethod, SslConnectorBuilder, SSL_VERIFY_NONE};
 use rustyline::error::ReadlineError;
+use std::env;
 use std::io::{self, Write};
+use std::net::TcpStream;
 use termion::screen::AlternateScreen;
 
 macro_rules! println {
@@ -19,9 +24,19 @@ macro_rules! flush {
 }
 
 fn main() {
+    #[cfg(unix)]
+    let mut nick = env::var("USER").unwrap_or("unknown".to_string());
+    #[cfg(windows)]
+    let mut nick = env::var("USERNAME").unwrap_or("unknown".to_string());
+    #[cfg(not(any(unix, windows)))]
+    let mut nick = "unknown".to_string();
+
+    let mut stream = None;
+    let ssl = SslConnectorBuilder::new(SslMethod::tls()).expect("I blame OpenSSL!").build();
+
     let mut screen = AlternateScreen::from(io::stdout());
-    println!(screen, "{}Welcome to unnamed.", termion::cursor::Goto(1, 1));
-    println!(screen, "To set your name, type");
+    println!(screen, "{}Welcome, {}", termion::cursor::Goto(1, 1), nick);
+    println!(screen, "To change your name, type");
     println!(screen, "/nick <name>");
     println!(screen, "To connect to a server, type");
     println!(screen, "/connect <ip>");
@@ -30,6 +45,7 @@ fn main() {
 
     let mut editor = rustyline::Editor::<()>::new();
     loop {
+        flush!(screen);
         let input = match editor.readline("> ") {
             Ok(ok) => ok,
             Err(ReadlineError::Eof) => break,
@@ -40,7 +56,84 @@ fn main() {
         };
         editor.add_history_entry(&input);
 
-        let parts = parser::parse(&input);
-        println!(screen, "{:?}", parts);
+        if input.starts_with('/') {
+            let mut args = parser::parse(&input[1..]);
+            if args.is_empty() {
+                continue;
+            }
+            let command = args.remove(0);
+
+            macro_rules! usage {
+                ($amount:expr, $usage:expr) => {
+                    if args.len() != $amount {
+                        println!(screen, concat!("Usage: /", $usage));
+                        continue;
+                    }
+                }
+            }
+
+            match &*command {
+                "nick" => {
+                    usage!(1, "nick <name>");
+                    nick = args.remove(0);
+                    println!(screen, "Your name is now {}", nick);
+                },
+                "connect" => {
+                    usage!(1, "connect <ip[:port]>");
+                    let mut parts = args[0].split(":");
+                    let ip = match parts.next() {
+                        Some(some) => some,
+                        None => {
+                            println!(screen, "test");
+                            continue;
+                        }
+                    };
+                    let port = parts.next().map(|val| match val.parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!(screen, "Not a valid port, using default.");
+                            common::DEFAULT_PORT
+                        }
+                    }).unwrap_or(common::DEFAULT_PORT);
+                    if parts.next().is_some() {
+                        println!(screen, "Still going? It's <ip[:port]>, not <ip[:port[:foo[:bar[:whatever]]]]>...");
+                        continue;
+                    }
+                    let tcp = match TcpStream::connect((ip, port)) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!(screen, "Could not connect!");
+                            println!(screen, "Scary debug details: {}", err);
+                            continue;
+                        }
+                    };
+                    let mut ssl = ssl.configure().expect(":(");
+                    ssl.ssl_mut().set_verify_callback(SSL_VERIFY_NONE, |_, _| true);
+                    stream = Some(match
+ssl.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(tcp) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!(screen, "OpenSSL failed to connect!");
+                            println!(screen, "{}", err);
+                            continue;
+                        }
+                    });
+                },
+                "disconnect" => {
+                    usage!(0, "disconnect");
+                    if stream.is_none() {
+                        println!(screen, "No connection open!");
+                        continue;
+                    }
+                    stream = None;
+                }
+                _ => {
+                    println!(screen, "Unknown command");
+                }
+            }
+            continue;
+        }
+
+
     }
 }

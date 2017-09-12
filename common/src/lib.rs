@@ -93,7 +93,7 @@ pub struct CommandReceive {
 }
 
 macro_rules! packet {
-    ($($type:expr)+) {
+    ($($type:ident),+) => {
         #[derive(Serialize, Deserialize, Debug)]
         #[serde(tag = "type", rename_all = "snake_case")]
         pub enum Packet {
