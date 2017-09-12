@@ -43,7 +43,7 @@ fn main() {
     let mut editor = rustyline::Editor::<()>::new();
     loop {
         flush!(screen);
-        let mut input = match editor.readline("> ") {
+        let input = match editor.readline("> ") {
             Ok(ok) => ok,
             Err(ReadlineError::Eof) => break,
             Err(err) => {
@@ -120,11 +120,12 @@ fn main() {
                 continue;
             },
             Some(ref mut stream) => {
-                input.push('\n');
-                let encoded = common::serialize(common::Packet::MessageCreate(common::MessageCreate {
+                let mut encoded = common::serialize(&common::Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
-                    message: input
+                    text: std::ffi::OsString::from(input)
                 })).expect("Serializing failed! Oh no! PANIC!");
+                encoded.push(b'\n');
+
                 if let Err(err) = stream.write_all(&encoded) {
                     eprintln!("Could not send message.");
                     eprintln!("{}", err);

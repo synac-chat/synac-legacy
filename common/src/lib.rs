@@ -3,8 +3,6 @@ extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use std::io;
-use serde::Serialize;
-use rmps::Serializer;
 use std::ffi::OsString;
 
 pub const DEFAULT_PORT: u16 = 8439;
@@ -34,7 +32,7 @@ pub struct Channel {
 pub struct Register {
     pub name: String,
     pub password: String,
-    pub server_password: Option<String>
+    pub publickey: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
@@ -63,13 +61,13 @@ pub struct MessageList {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageCreate {
     pub channel: usize,
-    pub message: OsString
+    pub text: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
     pub id: usize,
     pub channel: usize,
-    pub message: OsString
+    pub text: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {
@@ -95,7 +93,7 @@ pub struct CommandReceive {
 macro_rules! packet {
     ($($type:ident),+) => {
         #[derive(Serialize, Deserialize, Debug)]
-        #[serde(tag = "type", rename_all = "snake_case")]
+        #[serde(/*tag = "type",*/ rename_all = "snake_case")]
         pub enum Packet {
             Error(String),
             $($type($type),)+
@@ -117,11 +115,8 @@ packet! {
     CommandReceive
 }
 
-pub fn serialize(packet: Packet) -> Result<Vec<u8>, rmps::encode::Error> {
-    let mut buf = Vec::new();
-    packet.serialize(&mut Serializer::new(&mut buf))?;
-
-    Ok(buf)
+pub fn serialize(packet: &Packet) -> Result<Vec<u8>, rmps::encode::Error> {
+    rmps::to_vec(&packet)
 }
 pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
     rmps::from_slice(buf)

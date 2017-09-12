@@ -65,8 +65,18 @@ fn read_until(handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
                 return Ok(());
             }
             bytes.pop();
-            println!("{:?}", bytes);
-            println!("Decoding: {:?}", common::deserialize(&bytes));
+            let decoded = match common::deserialize(&bytes) {
+                Ok(ok) => ok,
+                Err(_) => return Ok(())
+            };
+
+            use common::Packet;
+            match decoded {
+                Packet::MessageCreate(msg) => {
+                    println!("{:?}", msg.text)
+                }
+                _ => unimplemented!(),
+            }
 
             read_until(handle_clone, bufreader);
             Ok(())
