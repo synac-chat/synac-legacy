@@ -6,6 +6,8 @@ use std::io;
 use serde::Serialize;
 use rmps::Serializer;
 
+pub const DEFAULT_PORT: u16 = 8439;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
     name: String,
