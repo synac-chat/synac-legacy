@@ -81,13 +81,7 @@ fn main() {
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
                     let mut parts = args[0].split(":");
-                    let ip = match parts.next() {
-                        Some(some) => some,
-                        None => {
-                            println!(screen, "test");
-                            continue;
-                        }
-                    };
+                    let ip = parts.next().unwrap();
                     let port = parts.next().map(|val| match val.parse() {
                         Ok(ok) => ok,
                         Err(_) => {

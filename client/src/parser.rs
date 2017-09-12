@@ -17,8 +17,10 @@ pub fn parse(input: &str) -> Vec<String> {
                 '\\' => escape = true,
                 '"' if buffer.is_empty() || quote => quote = !quote,
                 ' ' if !quote => {
-                    parts.push(buffer);
-                    buffer = String::new();
+                    if !buffer.is_empty() {
+                        parts.push(buffer);
+                        buffer = String::new();
+                    }
                 },
                 c => buffer.push(c)
             }
