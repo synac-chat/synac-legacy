@@ -5,6 +5,7 @@ extern crate serde;
 use std::io;
 use serde::Serialize;
 use rmps::Serializer;
+use std::ffi::OsString;
 
 pub const DEFAULT_PORT: u16 = 8439;
 
@@ -63,13 +64,13 @@ pub struct MessageList {
 pub struct MessageCreate {
     author: usize,
     channel: usize,
-    message: String
+    message: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
     id: usize,
     channel: usize,
-    message: String
+    message: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {
