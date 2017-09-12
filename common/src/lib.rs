@@ -8,11 +8,11 @@ use rmps::Serializer;
 
 pub const DEFAULT_PORT: u16 = 8439;
 
+// TYPES
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Login {
-    name: String,
-    password: Option<String>,
-    token: Option<String>
+pub struct Attribute {
+    id: usize,
+    name: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
@@ -23,16 +23,67 @@ pub struct User {
     attributes: Vec<usize>
 }
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Message {
-    author: User,
+pub struct Channel {
+    id: usize,
+    condition: Option<usize>
+}
+
+// CLIENT PACKETS
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Register {
+    name: String,
+    password: String,
+    server_password: Option<String>
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Login {
+    name: String,
+    password: Option<String>,
+    token: Option<String>
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelList {}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelCreate {
+    channel: Channel
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelUpdate {
+    channel: Channel
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelDelete {
+    channel: usize
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageList {
+    around: Option<usize>
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageCreate {
+    author: usize,
+    channel: usize,
     message: String
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageUpdate {
+    id: usize,
+    channel: usize,
+    message: String
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageDelete {
+    id: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandSend {
     author: usize,
     recipient: usize,
-    parts: Vec<String>
+    command: String,
+    args: Vec<String>
 }
+
+// SERVER PACKETS
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandReceive {
     author: User,
@@ -41,14 +92,29 @@ pub struct CommandReceive {
     args: Vec<String>
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Packet {
-    Login(Login),
-    Message(Message),
-    CommandSend(CommandSend),
-    CommandReceive(CommandReceive),
-    Error(String)
+macro_rules! packet {
+    ($($type:expr)+) {
+        #[derive(Serialize, Deserialize, Debug)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        pub enum Packet {
+            Error(String),
+            $($type($type),)+
+        }
+    }
+}
+packet! {
+    Register,
+    Login,
+    ChannelList,
+    ChannelCreate,
+    ChannelUpdate,
+    ChannelDelete,
+    MessageList,
+    MessageCreate,
+    MessageUpdate,
+    MessageDelete,
+    CommandSend,
+    CommandReceive
 }
 
 pub fn serialize(packet: Packet) -> Result<Vec<u8>, rmps::encode::Error> {

@@ -31,3 +31,11 @@ Differences from Discord:
  - No voice support or direct messages.
  - Open source.
  - Optionally send E2E encrypted messages.
+
+## Is this going to replace Discord?
+
+Never. Probably.  
+People want GUIs, centeralized servers and similar,
+all which is exactly what this is mostly against.
+
+However, it may some day run side by side with Discord.

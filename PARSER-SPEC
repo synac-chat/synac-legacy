@@ -2,10 +2,11 @@ This is the command parser.
 Its task is to break a string into an array of "parts",
 where the first part is the command and the rest is the arguments.
 
-The parser is handled on the client-side,
-and sent to the server using the `command_send` packet.
+The parser is handled on the client-side.
+It's used for commands (prefixed with /) and bot commands (/msg <bot user> ...).
+When used on bots the parts are sent to the server using the `command_send` packet.
 The server later translates `command_send` to `command_receive`,
-and sends it to the recipient (unless it's not a bot.)
+and sends it to the recipient (unless it's not a bot account.)
 
 The parser is simple. Pseudo code:
 

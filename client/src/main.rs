@@ -38,5 +38,9 @@ fn main() {
                 break;
             }
         };
+        editor.add_history_entry(&input);
+
+        let parts = parser::parse(&input);
+        println!(screen, "{:?}", parts);
     }
 }
