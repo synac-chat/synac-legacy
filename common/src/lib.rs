@@ -17,9 +17,10 @@ pub struct Login {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
     id: usize,
+    bot: bool,
     name: String,
     nick: Option<String>,
-    roles: Vec<usize>
+    attributes: Vec<usize>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
@@ -27,18 +28,27 @@ pub struct Message {
     message: String
 }
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Command {
+pub struct CommandSend {
+    author: usize,
+    recipient: usize,
+    parts: Vec<String>
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CommandReceive {
     author: User,
+    recipient: User,
     command: String,
     args: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Packet {
     Login(Login),
     Message(Message),
-    Command(Command)
+    CommandSend(CommandSend),
+    CommandReceive(CommandReceive),
+    Error(String)
 }
 
 pub fn serialize(packet: Packet) -> Result<Vec<u8>, rmps::encode::Error> {

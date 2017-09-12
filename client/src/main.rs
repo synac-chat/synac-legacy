@@ -1,10 +1,10 @@
 extern crate rustyline;
 extern crate termion;
 
+mod parser;
+
 use rustyline::error::ReadlineError;
 use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
 use termion::screen::AlternateScreen;
 
 macro_rules! println {
@@ -20,7 +20,7 @@ macro_rules! flush {
 
 fn main() {
     let mut screen = AlternateScreen::from(io::stdout());
-    println!(screen, "\rWelcome to unnamed.");
+    println!(screen, "{}Welcome to unnamed.", termion::cursor::Goto(1, 1));
     println!(screen, "To set your name, type");
     println!(screen, "/nick <name>");
     println!(screen, "To connect to a server, type");
