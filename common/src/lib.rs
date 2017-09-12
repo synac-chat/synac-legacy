@@ -12,76 +12,75 @@ pub const DEFAULT_PORT: u16 = 8439;
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Attribute {
-    id: usize,
-    name: String
+    pub id: usize,
+    pub name: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
-    id: usize,
-    bot: bool,
-    name: String,
-    nick: Option<String>,
-    attributes: Vec<usize>
+    pub id: usize,
+    pub bot: bool,
+    pub name: String,
+    pub nick: Option<String>,
+    pub attributes: Vec<usize>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
-    id: usize,
-    condition: Option<usize>
+    pub id: usize,
+    pub condition: Option<usize>
 }
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Register {
-    name: String,
-    password: String,
-    server_password: Option<String>
+    pub name: String,
+    pub password: String,
+    pub server_password: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
-    name: String,
-    password: Option<String>,
-    token: Option<String>
+    pub name: String,
+    pub password: Option<String>,
+    pub token: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelList {}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelCreate {
-    channel: Channel
+    pub channel: Channel
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelUpdate {
-    channel: Channel
+    pub channel: Channel
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelDelete {
-    channel: usize
+    pub channel: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageList {
-    around: Option<usize>
+    pub around: Option<usize>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageCreate {
-    author: usize,
-    channel: usize,
-    message: OsString
+    pub channel: usize,
+    pub message: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
-    id: usize,
-    channel: usize,
-    message: OsString
+    pub id: usize,
+    pub channel: usize,
+    pub message: OsString
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {
-    id: usize
+    pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandSend {
-    author: usize,
-    recipient: usize,
-    command: String,
-    args: Vec<String>
+    pub author: usize,
+    pub recipient: usize,
+    pub command: String,
+    pub args: Vec<String>
 }
 
 // SERVER PACKETS

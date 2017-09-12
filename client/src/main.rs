@@ -1,11 +1,9 @@
-extern crate openssl;
 extern crate rustyline;
 extern crate termion;
 extern crate common;
 
 mod parser;
 
-use openssl::ssl::{SslMethod, SslConnectorBuilder, SSL_VERIFY_NONE};
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Write};
@@ -32,7 +30,6 @@ fn main() {
     let mut nick = "unknown".to_string();
 
     let mut stream = None;
-    let ssl = SslConnectorBuilder::new(SslMethod::tls()).expect("I blame OpenSSL!").build();
 
     let mut screen = AlternateScreen::from(io::stdout());
     println!(screen, "{}Welcome, {}", termion::cursor::Goto(1, 1), nick);
@@ -46,7 +43,7 @@ fn main() {
     let mut editor = rustyline::Editor::<()>::new();
     loop {
         flush!(screen);
-        let input = match editor.readline("> ") {
+        let mut input = match editor.readline("> ") {
             Ok(ok) => ok,
             Err(ReadlineError::Eof) => break,
             Err(err) => {
@@ -93,22 +90,11 @@ fn main() {
                         println!(screen, "Still going? It's <ip[:port]>, not <ip[:port[:foo[:bar[:whatever]]]]>...");
                         continue;
                     }
-                    let tcp = match TcpStream::connect((ip, port)) {
+                    stream = Some(match TcpStream::connect((ip, port)) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!(screen, "Could not connect!");
                             println!(screen, "Scary debug details: {}", err);
-                            continue;
-                        }
-                    };
-                    let mut ssl = ssl.configure().expect(":(");
-                    ssl.ssl_mut().set_verify_callback(SSL_VERIFY_NONE, |_, _| true);
-                    stream = Some(match
-ssl.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(tcp) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            println!(screen, "OpenSSL failed to connect!");
-                            println!(screen, "{}", err);
                             continue;
                         }
                     });
@@ -116,7 +102,7 @@ ssl.danger_connect_without_providing_domain_for_certificate_verification_and_ser
                 "disconnect" => {
                     usage!(0, "disconnect");
                     if stream.is_none() {
-                        println!(screen, "No connection open!");
+                        println!(screen, "You're not connected to a server.");
                         continue;
                     }
                     stream = None;
@@ -128,6 +114,23 @@ ssl.danger_connect_without_providing_domain_for_certificate_verification_and_ser
             continue;
         }
 
-
+        match stream {
+            None => {
+                println!(screen, "You're not connected to a server.");
+                continue;
+            },
+            Some(ref mut stream) => {
+                input.push('\n');
+                let encoded = common::serialize(common::Packet::MessageCreate(common::MessageCreate {
+                    channel: 0,
+                    message: input
+                })).expect("Serializing failed! Oh no! PANIC!");
+                if let Err(err) = stream.write_all(&encoded) {
+                    eprintln!("Could not send message.");
+                    eprintln!("{}", err);
+                    continue;
+                };
+            }
+        }
     }
 }
