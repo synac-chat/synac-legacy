@@ -9,7 +9,8 @@ use rmps::Serializer;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
     name: String,
-    password: String
+    password: Option<String>,
+    token: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
