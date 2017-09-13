@@ -3,7 +3,6 @@ extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use std::io;
-use std::ffi::OsString;
 
 pub const DEFAULT_PORT: u16 = 8439;
 
@@ -32,7 +31,7 @@ pub struct Channel {
 pub struct Register {
     pub name: String,
     pub password: String,
-    pub publickey: String
+    pub publickey: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
@@ -61,13 +60,13 @@ pub struct MessageList {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageCreate {
     pub channel: usize,
-    pub text: OsString
+    pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
     pub id: usize,
     pub channel: usize,
-    pub text: OsString
+    pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {

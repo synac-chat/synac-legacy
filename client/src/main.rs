@@ -1,9 +1,11 @@
+extern crate openssl;
 extern crate rustyline;
 extern crate termion;
 extern crate common;
 
 mod parser;
 
+use openssl::rsa::Rsa;
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Write};
@@ -90,14 +92,46 @@ fn main() {
                         println!(screen, "Still going? It's <ip[:port]>, not <ip[:port[:foo[:bar[:whatever]]]]>...");
                         continue;
                     }
-                    stream = Some(match TcpStream::connect((ip, port)) {
+                    println!(screen, "To securely connect, we need some data from the server (\"public key\").");
+                    println!(screen, "The server owner should have given you this.");
+                    println!(screen, "Once you have it, enter it here and end it by typing \"END\" on a new line.");
+                    println!(screen);
+                    flush!(screen);
+                    let mut public_key = String::new();
+                    loop {
+                        let result = editor.readline("");
+                        let input = match result.as_ref().map(|s| &**s) {
+                            Ok("END") |
+                            Err(&ReadlineError::Eof) => break,
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                eprintln!("Couldn't read line: {}", err);
+                                break;
+                            }
+                        };
+                        editor.add_history_entry(&input);
+
+                        public_key.push_str(&input);
+                        public_key.push('\n');
+                    }
+                    println!(screen, "{}", public_key);
+                    let rsa = match Rsa::public_key_from_pem(public_key.as_bytes()) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            eprintln!("Could not initiate RSA.");
+                            eprintln!("Is that weird thing you entered invalid? Just a guess.");
+                            eprintln!("Scary debug details: {}", err);
+                            continue;
+                        }
+                    };
+                    stream = Some((rsa, match TcpStream::connect((ip, port)) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!(screen, "Could not connect!");
-                            println!(screen, "Scary debug details: {}", err);
+                            println!(screen, "{}", err);
                             continue;
                         }
-                    });
+                    }));
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -119,14 +153,17 @@ fn main() {
                 println!(screen, "You're not connected to a server.");
                 continue;
             },
-            Some(ref mut stream) => {
-                let mut encoded = common::serialize(&common::Packet::MessageCreate(common::MessageCreate {
+            Some((ref mut rsa, ref mut stream)) => {
+                let encoded = common::serialize(&common::Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
-                    text: std::ffi::OsString::from(input)
+                    text: input.into_bytes()
                 })).expect("Serializing failed! Oh no! PANIC!");
-                encoded.push(b'\n');
 
-                if let Err(err) = stream.write_all(&encoded) {
+                let mut encrypted_rsa = vec![0; rsa.size()];
+                rsa.public_encrypt(&encoded,  &mut encrypted_rsa, openssl::rsa::PKCS1_PADDING)
+                    .expect("Oh noes I couldn't encrypt");
+
+                if let Err(err) = stream.write_all(&encrypted_rsa).and_then(|_| stream.flush()) {
                     eprintln!("Could not send message.");
                     eprintln!("{}", err);
                     continue;
