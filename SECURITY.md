@@ -2,11 +2,11 @@
 
 List of security related things that are important to know.
 
-  - Does not use SSL
+  - Does not use SSL  
     Reason behind this is because we can't expect every
     server owner to own a domain and know how to
     sign a certificate. It defeats simplicity.
-  - Details
+  - Details  
     AES 256-bit CBC encrypts the message with a random key and IV.
     RSA 3072-bit encrypts the AES key and IV.
   - Key exchange
