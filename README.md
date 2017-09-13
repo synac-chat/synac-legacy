@@ -25,7 +25,6 @@ Differences from Discord:
 
  - Bot accounts benefit from a command API which makes it easy and consistent to parse.
  - Bot accounts can only see messages they're allowed to.
- - Communication uses TCP with SSL, so easier to get started for developers.
  - Decenteralized. You will have to set up the server yourself (this is good for security.)
  - No terms of service. Do what you want.
  - No voice support or direct messages.

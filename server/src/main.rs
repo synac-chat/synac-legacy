@@ -53,7 +53,7 @@ fn main() {
                 value   BLOB NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    let mut statement = db.prepare("SELECT value FROM keys WHERE type = 0").unwrap();
+    let mut statement = db.prepare("SELECT value FROM data WHERE type = 0").unwrap();
     let mut rows = statement.query(&[]).unwrap();
 
     let rsa;
@@ -74,13 +74,11 @@ fn main() {
         println!("In case you forgot your public key, it's:");
         println!("{}", string);
     } else {
-        db.execute("DELETE FROM keys", &[]).unwrap();
         // Generate new public and private keys.
         rsa = Rsa::generate(3072).expect("Failed to generate public/private key");
         let private = rsa.private_key_to_pem().unwrap();
         let public = rsa.public_key_to_pem().unwrap();
         db.execute("INSERT INTO data (type, value) VALUES (0, ?1)", &[&private]).unwrap();
-        db.execute("INSERT INTO keys (type, value) VALUES (1, ?1)", &[&public]).unwrap();
         // be friendly
         let string = attempt_or!(std::str::from_utf8(&public), {
             eprintln!("Oh no! Text isn't valid UTF-8!");
@@ -111,7 +109,7 @@ fn main() {
 
     let server = listener.incoming().for_each(|(conn, _)| {
         let bufreader = BufReader::new(conn);
-        read_until(rsa.clone(), handle.clone(), bufreader);
+        handle_client(rsa.clone(), handle.clone(), bufreader);
 
         Ok(())
     });
@@ -119,41 +117,56 @@ fn main() {
     core.run(server).expect("Could not run tokio core!");
 }
 
-fn read_until(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
+fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
     let handle_clone = handle.clone();
     let rsa_clone = rsa.clone();
-    let lines = io::read_exact(bufreader, vec![0; rsa.size()])
+    let length = io::read_exact(bufreader, vec![0; 2])
+        .map_err(|_| ())
         .and_then(move |(bufreader, bytes)| {
-            if bytes.is_empty() {
+            let size1 = bytes[0];
+            let size2 = bytes[1];
+            let size = ((size1 as u16) << 8) + size2 as u16;
+
+            println!("Bytes: {:?}", bytes);
+            println!("Size: {}", size);
+
+            if size == 0 {
                 return Ok(());
             }
 
-            println!("Raw: {:?}", bytes);
-            let mut decrypted = vec![0; rsa.size()];
-            rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING)
-                .expect("Well, that sucks");
-            // attempt_or!(rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING), {
-            //     return Ok(());
-            // });
+            let handle_clone_clone_ugh = handle_clone.clone();
+            let lines = io::read_exact(bufreader, vec![0; size as usize])
+                .map_err(|_| ())
+                .and_then(move |(bufreader, bytes)| {
+                    println!("Raw: {:?}", bytes);
+                    let mut decrypted = vec![0; rsa.size()];
+                    rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING)
+                        .expect("Well, that sucks");
+                    // attempt_or!(rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING), {
+                    //     return Ok(());
+                    // });
 
-            println!("Decrypted: {:?}", decrypted);
-            let packet = attempt_or!(common::deserialize(&decrypted), {
-                println!("Heads up: One of your clients is sending broken packets.");
-                return Ok(());
-            });
+                    println!("Decrypted: {:?}", decrypted);
+                    let packet = attempt_or!(common::deserialize(&decrypted), {
+                        println!("Heads up: One of your clients is sending broken packets.");
+                        return Ok(());
+                    });
 
-            use common::Packet;
-            match packet {
-                Packet::MessageCreate(msg) => {
-                    println!("Decoded: {:?}", msg.text)
-                }
-                _ => unimplemented!(),
-            }
+                    use common::Packet;
+                    match packet {
+                        Packet::MessageCreate(msg) => {
+                            println!("Decoded: {:?}", msg.text)
+                        }
+                        _ => unimplemented!(),
+                    }
 
-            read_until(rsa_clone, handle_clone, bufreader);
+                    handle_client(rsa_clone, handle_clone_clone_ugh, bufreader);
+                    Ok(())
+                });
+
+            handle_clone.spawn(lines);
             Ok(())
-        })
-        .map_err(|_| ());
+        });
 
-    handle.spawn(lines);
+    handle.spawn(length);
 }

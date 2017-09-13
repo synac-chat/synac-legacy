@@ -109,12 +109,10 @@ fn main() {
                                 break;
                             }
                         };
-                        editor.add_history_entry(&input);
 
                         public_key.push_str(&input);
                         public_key.push('\n');
                     }
-                    println!(screen, "{}", public_key);
                     let rsa = match Rsa::public_key_from_pem(public_key.as_bytes()) {
                         Ok(ok) => ok,
                         Err(err) => {
@@ -159,8 +157,16 @@ fn main() {
                     text: input.into_bytes()
                 })).expect("Serializing failed! Oh no! PANIC!");
 
-                let mut encrypted_rsa = vec![0; rsa.size()];
-                rsa.public_encrypt(&encoded,  &mut encrypted_rsa, openssl::rsa::PKCS1_PADDING)
+                let size = rsa.size();
+                let mut encrypted_rsa = vec![0; size+2];
+
+                encrypted_rsa[0] = (size >> 8)  as u8;
+                encrypted_rsa[1] = (size % 256) as u8;
+
+                println!(screen, "Size: {}", size);
+                println!(screen, "Bytes: {} {}", encrypted_rsa[0], encrypted_rsa[1]);
+
+                rsa.public_encrypt(&encoded,  &mut encrypted_rsa[2..], openssl::rsa::PKCS1_PADDING)
                     .expect("Oh noes I couldn't encrypt");
 
                 if let Err(err) = stream.write_all(&encrypted_rsa).and_then(|_| stream.flush()) {
