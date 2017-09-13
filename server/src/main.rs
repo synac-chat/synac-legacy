@@ -5,6 +5,8 @@ extern crate openssl;
 extern crate tokio_core;
 extern crate tokio_io;
 
+mod decrypter;
+
 use futures::{Future, Stream};
 use openssl::rsa::Rsa;
 use std::env;
@@ -120,37 +122,30 @@ fn main() {
 fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
     let handle_clone = handle.clone();
     let rsa_clone = rsa.clone();
-    let length = io::read_exact(bufreader, vec![0; 2])
+    let length = io::read_exact(bufreader, vec![0; 4])
         .map_err(|_| ())
         .and_then(move |(bufreader, bytes)| {
-            let size1 = bytes[0];
-            let size2 = bytes[1];
-            let size = ((size1 as u16) << 8) + size2 as u16;
+            let size_rsa = ((bytes[0] as usize) << 8) + bytes[1] as usize;
+            let size_aes = ((bytes[2] as usize) << 8) + bytes[3] as usize;
 
-            println!("Bytes: {:?}", bytes);
-            println!("Size: {}", size);
+            println!("Size RSA: {}", size_rsa);
+            println!("Size AES: {}", size_aes);
 
-            if size == 0 {
+            if size_rsa == 0 || size_aes == 0 {
                 return Ok(());
             }
 
             let handle_clone_clone_ugh = handle_clone.clone();
-            let lines = io::read_exact(bufreader, vec![0; size as usize])
+            let lines = io::read_exact(bufreader, vec![0; size_rsa+size_aes])
                 .map_err(|_| ())
                 .and_then(move |(bufreader, bytes)| {
-                    println!("Raw: {:?}", bytes);
-                    let mut decrypted = vec![0; rsa.size()];
-                    rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING)
-                        .expect("Well, that sucks");
-                    // attempt_or!(rsa.private_decrypt(&bytes, &mut decrypted, openssl::rsa::PKCS1_PADDING), {
-                    //     return Ok(());
-                    // });
-
-                    println!("Decrypted: {:?}", decrypted);
-                    let packet = attempt_or!(common::deserialize(&decrypted), {
-                        println!("Heads up: One of your clients is sending broken packets.");
-                        return Ok(());
-                    });
+                    let packet = match decrypter::decrypt(&rsa_clone, size_rsa, &bytes) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            eprintln!("Failed to decrypt message from client: {}", err);
+                            return Ok(());
+                        }
+                    };
 
                     use common::Packet;
                     match packet {

@@ -3,6 +3,7 @@ extern crate rustyline;
 extern crate termion;
 extern crate common;
 
+mod encrypter;
 mod parser;
 
 use openssl::rsa::Rsa;
@@ -152,26 +153,23 @@ fn main() {
                 continue;
             },
             Some((ref mut rsa, ref mut stream)) => {
-                let encoded = common::serialize(&common::Packet::MessageCreate(common::MessageCreate {
+                let packet = common::Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
                     text: input.into_bytes()
-                })).expect("Serializing failed! Oh no! PANIC!");
+                });
 
-                let size = rsa.size();
-                let mut encrypted_rsa = vec![0; size+2];
+                let encrypted = match encrypter::encrypt(rsa, &packet) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        println!(screen, "Sending failed");
+                        println!(screen, "{}", err);
+                        continue;
+                    }
+                };
 
-                encrypted_rsa[0] = (size >> 8)  as u8;
-                encrypted_rsa[1] = (size % 256) as u8;
-
-                println!(screen, "Size: {}", size);
-                println!(screen, "Bytes: {} {}", encrypted_rsa[0], encrypted_rsa[1]);
-
-                rsa.public_encrypt(&encoded,  &mut encrypted_rsa[2..], openssl::rsa::PKCS1_PADDING)
-                    .expect("Oh noes I couldn't encrypt");
-
-                if let Err(err) = stream.write_all(&encrypted_rsa).and_then(|_| stream.flush()) {
-                    eprintln!("Could not send message.");
-                    eprintln!("{}", err);
+                if let Err(err) = stream.write_all(&encrypted).and_then(|_| stream.flush()) {
+                    println!(screen, "Could not send message.");
+                    println!(screen, "{}", err);
                     continue;
                 };
             }
