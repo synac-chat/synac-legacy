@@ -11,7 +11,7 @@ use openssl::rsa::Rsa;
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use termion::screen::AlternateScreen;
 
 macro_rules! print {
@@ -34,7 +34,7 @@ fn main() {
     let db = match rusqlite::Connection::open("data.sqlite") {
         Ok(ok) => ok,
         Err(err) => {
-            eprintln!("Failed to open database.");
+            eprintln!("Failed to open database");
             eprintln!("{}", err);
             return;
         }
@@ -103,24 +103,10 @@ fn main() {
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
-                    let mut parts = args[0].split(":");
-                    let ip = parts.next().unwrap();
-                    let port = parts.next().map(|val| match val.parse() {
-                        Ok(ok) => ok,
-                        Err(_) => {
-                            println!(stdout, "Not a valid port, using default.");
-                            common::DEFAULT_PORT
-                        }
-                    }).unwrap_or(common::DEFAULT_PORT);
-                    if parts.next().is_some() {
-                        println!(stdout, "Still going? It's <ip[:port]>, not <ip[:port[:foo[:bar[:whatever]]]]>...");
-                        continue;
-                    }
-                    use std::net::ToSocketAddrs;
-                    let addr = match (ip, port).to_socket_addrs().ok().and_then(|mut iter| iter.next()) {
+                    let addr = match parse_ip(&args[0]) {
                         Some(some) => some,
                         None => {
-                            println!(stdout, "Not a valid socket address.");
+                            println!(stdout, "Could not parse IP");
                             continue;
                         }
                     };
@@ -266,6 +252,9 @@ fn main() {
                                     "UPDATE servers SET token = ? WHERE ip = ?",
                                     &[&login.token, &addr.to_string()]
                                 ).unwrap();
+                                if login.created {
+                                    println!(stdout, "Account created");
+                                }
                             },
                             Ok(Packet::Err(code)) => match code {
                                 common::ERR_LOGIN_INVALID => {},
@@ -294,11 +283,22 @@ fn main() {
                 "disconnect" => {
                     usage!(0, "disconnect");
                     if stream.is_none() {
-                        println!(stdout, "You're not connected to a server.");
+                        println!(stdout, "You're not connected to a server");
                         continue;
                     }
                     stream = None;
-                }
+                },
+                "forget" => {
+                    usage!(1, "forget <ip>");
+                    let addr = match parse_ip(&args[0]) {
+                        Some(some) => some,
+                        None => {
+                            println!(stdout, "Not a valid IP");
+                            continue;
+                        }
+                    };
+                    db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
+                },
                 _ => {
                     println!(stdout, "Unknown command");
                 }
@@ -308,7 +308,7 @@ fn main() {
 
         match stream {
             None => {
-                println!(stdout, "You're not connected to a server.");
+                println!(stdout, "You're not connected to a server");
                 continue;
             },
             Some((ref mut rsa_encrypt, _, ref mut stream)) => {
@@ -318,10 +318,39 @@ fn main() {
                 });
 
                 if let Err(err) = common::write(stream, rsa_encrypt, &packet) {
-                    println!(stdout, "Failed to deliver message.");
+                    println!(stdout, "Failed to deliver message");
                     println!(stdout, "{}", err);
                 }
             }
         }
     }
+}
+
+fn parse_ip(input: &str) -> Option<SocketAddr> {
+    let mut parts = input.split(":");
+    let ip = match parts.next() {
+        Some(some) => some,
+        None => return None
+    };
+    let port = match parts.next() {
+        Some(some) => match some.parse() {
+            Ok(ok) => ok,
+            Err(_) => return None
+        },
+        None => common::DEFAULT_PORT
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let ip = if ip == "localhost" {
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+    } else {
+        match ip.parse::<IpAddr>() {
+            Ok(ip) => ip,
+            Err(_) => return None
+        }
+    };
+
+    Some(SocketAddr::new(ip, port))
 }

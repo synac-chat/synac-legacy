@@ -198,7 +198,7 @@ fn handle_client(
                                 println!("Failed to generate random bytes for a token.");
                                 return Ok(());
                             });
-                            for byte in &mut token {
+                            for byte in token.iter_mut() {
                                 *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
                             }
                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
