@@ -7,7 +7,9 @@ extern crate tokio_io;
 
 use common::Packet;
 use futures::{Future, Stream};
+use openssl::rand;
 use openssl::rsa::Rsa;
+use std::collections::HashMap;
 use std::env;
 use std::io::{BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
@@ -25,6 +27,13 @@ macro_rules! attempt_or {
             }
         }
     }
+}
+
+pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+struct Session {
+    id: usize,
+    rsa: Rsa
 }
 
 fn main() {
@@ -124,13 +133,22 @@ fn main() {
 
     println!("I'm alive!");
 
-    let server = listener.incoming().for_each(|(conn, _)| {
+    let sessions = Rc::new(HashMap::new());
+
+    let server = listener.incoming().for_each(|(conn, ip)| {
         use tokio_io::AsyncRead;
         let (reader, writer) = conn.split();
         let bufreader = BufReader::new(reader);
         let bufwriter = BufWriter::new(writer);
 
-        handle_client(rsa.clone(), handle.clone(), bufreader, bufwriter);
+        handle_client(
+            rsa.clone(),
+            handle.clone(),
+            sessions.clone(),
+            ip.ip(),
+            bufreader,
+            bufwriter,
+        );
 
         Ok(())
     });
@@ -141,6 +159,8 @@ fn main() {
 fn handle_client(
         rsa: Rc<Rsa>,
         handle: Rc<Handle>,
+        sessions: Rc<HashMap<IpAddr, Session>>,
+        ip: IpAddr,
         bufreader: BufReader<tokio_io::io::ReadHalf<TcpStream>>,
         bufwriter: BufWriter<tokio_io::io::WriteHalf<TcpStream>>
     ) {
@@ -151,9 +171,6 @@ fn handle_client(
         .and_then(move |(bufreader, bytes)| {
             let (size_rsa, size_aes) = common::decode_size(&bytes);
             let (size_rsa, size_aes) = (size_rsa as usize, size_aes as usize);
-
-            println!("Size RSA: {}", size_rsa);
-            println!("Size AES: {}", size_aes);
 
             if size_rsa == 0 || size_aes == 0 {
                 return Ok(());
@@ -171,28 +188,67 @@ fn handle_client(
                         }
                     };
 
-                    let reply;
-                    let rsa;
+                    let mut reply = None;
+                    let mut public_key = None;
 
                     match packet {
                         Packet::Login(login) => {
-                            reply = Packet::Err(common::ERR_LOGIN_BANNED); // Just a test
-                            rsa = match Rsa::public_key_from_pem(&login.public_key) {
-                                Ok(ok) => ok,
-                                Err(_) => return Ok(()),
-                            };
+                            let mut token = [0; 32];
+                            attempt_or!(rand::rand_bytes(&mut token), {
+                                println!("Failed to generate random bytes for a token.");
+                                return Ok(());
+                            });
+                            for byte in &mut token {
+                                *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
+                            }
+                            reply = Some(Packet::LoginSuccess(common::LoginSuccess {
+                                created: true,
+                                token: unsafe { String::from_utf8_unchecked(token.to_vec()) }
+                            })); // Just a test
+                            public_key = Some(login.public_key);
                         },
                         Packet::MessageCreate(msg) => {
                             println!("Decoded: {:?}", msg.text);
-                            return Ok(());
                         },
                         _ => unimplemented!(),
                     }
 
-                    let encrypted: Vec<u8> = attempt_or!(common::encrypt(&reply, &rsa), {
-                        println!("Failed to encrypt reply");
-                        return Ok(());
-                    });
+                    let reply = match reply {
+                        Some(some) => some,
+                        None => {
+                            handle_client(
+                                rsa_clone,
+                                handle_clone_clone_ugh,
+                                sessions,
+                                ip,
+                                bufreader,
+                                bufwriter
+                            );
+                            return Ok(());
+                        }
+                    };
+
+                    let _rsa: Rsa;
+                    let encrypted = {
+                        let rsa = match public_key {
+                            Some(public_key) => {
+                                _rsa = match Rsa::public_key_from_pem(&public_key) {
+                                    Ok(ok) => ok,
+                                    Err(_) => return Ok(())
+                                };
+                                &_rsa
+                            },
+                            None => match sessions.get(&ip) {
+                                Some(ref s) => &s.rsa,
+                                None => return Ok(())
+                            }
+                        };
+
+                        attempt_or!(common::encrypt(&reply, &rsa), {
+                            println!("Failed to encrypt reply");
+                            return Ok(());
+                        })
+                    };
                     let handle_clone_clone_clone_uugghh = handle_clone_clone_ugh.clone();
                     let write = io::write_all(bufwriter, encrypted)
                         .map_err(|_| ())
@@ -202,6 +258,8 @@ fn handle_client(
                             handle_client(
                                 rsa_clone,
                                 handle_clone_clone_clone_uugghh,
+                                sessions,
+                                ip,
                                 bufreader,
                                 bufwriter
                             );
@@ -218,3 +276,4 @@ fn handle_client(
 
     handle.spawn(length);
 }
+

@@ -31,17 +31,18 @@ pub struct User {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
-    pub id: usize,
-    pub condition: Option<usize>
+    pub condition: Option<usize>,
+    pub id: usize
 }
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
+    pub bot: bool,
     pub name: String,
     pub password: Option<String>,
-    pub token: Option<String>,
-    pub public_key: Vec<u8>
+    pub public_key: Vec<u8>,
+    pub token: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelList {}
@@ -68,8 +69,8 @@ pub struct MessageCreate {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
-    pub id: usize,
     pub channel: usize,
+    pub id: usize,
     pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,10 +79,10 @@ pub struct MessageDelete {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Command {
+    pub args: Vec<String>,
     pub author: usize,
-    pub recipient: usize,
     pub command: String,
-    pub args: Vec<String>
+    pub recipient: usize
 }
 
 // SERVER PACKETS
@@ -92,10 +93,10 @@ pub struct LoginSuccess {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandReceive {
+    pub args: Vec<String>,
     pub author: User,
-    pub recipient: User,
     pub command: String,
-    pub args: Vec<String>
+    pub recipient: User
 }
 
 macro_rules! packet {

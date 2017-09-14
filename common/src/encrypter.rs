@@ -14,8 +14,8 @@ pub fn encode_size(size_rsa: u16, size_aes: u16) -> [u8; 4] {
 pub fn encrypt(input: &Packet, rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Error>> {
     let encoded = serialize(input)?;
 
-    let mut key = vec![0; 32];
-    let mut iv = vec![0; 16];
+    let mut key = [0; 32];
+    let mut iv =  [0; 16];
 
     rand::rand_bytes(&mut key)?;
     rand::rand_bytes(&mut iv)?;
@@ -26,9 +26,11 @@ pub fn encrypt(input: &Packet, rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::E
     let size_rsa = rsa.size();
     let mut encrypted_rsa = vec![0; size_rsa];
 
-    key.append(&mut iv);
+    let mut keyiv = Vec::with_capacity(32 + 16);
+    keyiv.extend(key.into_iter());
+    keyiv.extend(iv.into_iter());
 
-    rsa.public_encrypt(&key, &mut encrypted_rsa, PKCS1_PADDING)?;
+    rsa.public_encrypt(&keyiv, &mut encrypted_rsa, PKCS1_PADDING)?;
 
     let mut encrypted = Vec::with_capacity(4+size_rsa+size_aes);
     encrypted.extend(encode_size(size_rsa as u16, size_aes as u16).into_iter());

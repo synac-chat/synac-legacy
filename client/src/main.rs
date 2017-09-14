@@ -193,10 +193,11 @@ fn main() {
                     let mut success = false;
                     if let Some(token) = token {
                         let packet = Packet::Login(common::Login {
+                            bot: false,
                             name: nick.clone(),
                             password: None,
-                            token: Some(token.clone()),
-                            public_key: public_key.clone()
+                            public_key: public_key.clone(),
+                            token: Some(token.clone())
                         });
 
                         if let Err(err) = common::write(&mut tcp, &rsa_encrypt, &packet) {
@@ -246,10 +247,11 @@ fn main() {
                         println!(stdout);
 
                         let packet = Packet::Login(common::Login {
+                            bot: false,
                             name: nick.clone(),
                             password: Some(pass),
-                            token: None,
-                            public_key: public_key
+                            public_key: public_key,
+                            token: None
                         });
 
                         if let Err(err) = common::write(&mut tcp, &rsa_encrypt, &packet) {
@@ -261,7 +263,7 @@ fn main() {
                         match common::read(&mut tcp, &rsa_decrypt) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 db.execute(
-                                    "REPLACE INTO servers (token) VALUES (?) WHERE ip = ?",
+                                    "UPDATE servers SET token = ? WHERE ip = ?",
                                     &[&login.token, &addr.to_string()]
                                 ).unwrap();
                             },
