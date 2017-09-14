@@ -5,8 +5,6 @@ extern crate openssl;
 extern crate tokio_core;
 extern crate tokio_io;
 
-mod decrypter;
-
 use futures::{Future, Stream};
 use openssl::rsa::Rsa;
 use std::env;
@@ -155,7 +153,7 @@ fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStrea
             let lines = io::read_exact(bufreader, vec![0; size_rsa+size_aes])
                 .map_err(|_| ())
                 .and_then(move |(bufreader, bytes)| {
-                    let packet = match decrypter::decrypt(&rsa_clone, size_rsa, &bytes) {
+                    let packet = match common::decrypt(&rsa_clone, size_rsa, &bytes) {
                         Ok(ok) => ok,
                         Err(err) => {
                             eprintln!("Failed to decrypt message from client: {}", err);

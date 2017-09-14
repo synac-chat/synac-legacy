@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["jD91mZM2 <LEGOlord208@krake.one>"]
 
 [dependencies]
-rmp-serde    = "0.13.6"
-serde        = "1.0.14"
-serde_derive = "1.0.14"
+openssl      = "0.9"
+rmp-serde    = "0.13"
+serde        = "1.0"
+serde_derive = "1.0"

@@ -1,6 +1,10 @@
+extern crate openssl;
 extern crate rmp_serde as rmps;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
+
+pub mod encrypter;
+pub use encrypter::*;
 
 use std::io;
 
@@ -27,6 +31,10 @@ pub struct Channel {
 }
 
 // CLIENT PACKETS
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Exists {
+    pub name: String
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Register {
     pub name: String,
@@ -100,6 +108,7 @@ macro_rules! packet {
     }
 }
 packet! {
+    Exists,
     Register,
     Login,
     ChannelList,

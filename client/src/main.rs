@@ -3,7 +3,6 @@ extern crate rustyline;
 extern crate termion;
 extern crate common;
 
-mod encrypter;
 mod parser;
 
 use openssl::rsa::Rsa;
@@ -158,7 +157,7 @@ fn main() {
                     text: input.into_bytes()
                 });
 
-                let encrypted = match encrypter::encrypt(rsa, &packet) {
+                let encrypted = match common::encrypt(rsa, &packet) {
                     Ok(ok) => ok,
                     Err(err) => {
                         println!(screen, "Sending failed");

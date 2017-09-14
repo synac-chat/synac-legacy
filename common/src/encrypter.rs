@@ -1,9 +1,10 @@
+use *;
 use openssl::rand;
 use openssl::rsa::{Rsa, PKCS1_PADDING};
 use openssl::symm::{self, Cipher};
 
-pub fn encrypt(rsa: &Rsa, input: &::common::Packet) -> Result<Vec<u8>, Box<::std::error::Error>> {
-    let encoded = ::common::serialize(input)?;
+pub fn encrypt(rsa: &Rsa, input: &Packet) -> Result<Vec<u8>, Box<::std::error::Error>> {
+    let encoded = serialize(input)?;
 
     let mut key = vec![0; 32];
     let mut iv = vec![0; 16];
@@ -30,4 +31,15 @@ pub fn encrypt(rsa: &Rsa, input: &::common::Packet) -> Result<Vec<u8>, Box<::std
     encrypted.append(&mut encrypted_aes);
 
     Ok(encrypted)
+}
+
+pub fn decrypt(rsa: &Rsa, size_rsa: usize, input: &[u8]) -> Result<Packet, Box<::std::error::Error>> {
+    let mut keyiv = vec![0; size_rsa];
+    rsa.private_decrypt(&input[..size_rsa], &mut keyiv, PKCS1_PADDING)?;
+    keyiv.truncate(32+16);
+
+    let (key, iv) = keyiv.split_at(32);
+    let decrypted = symm::decrypt(Cipher::aes_256_cbc(), key, Some(iv), &input[size_rsa..])?;
+
+    Ok(deserialize(&decrypted)?)
 }
