@@ -11,7 +11,7 @@ pub fn encode_size(size_rsa: u16, size_aes: u16) -> [u8; 4] {
         (size_aes % 256) as u8
     ]
 }
-pub fn encrypt(rsa: &Rsa, input: &Packet) -> Result<Vec<u8>, Box<::std::error::Error>> {
+pub fn encrypt(input: &Packet, rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Error>> {
     let encoded = serialize(input)?;
 
     let mut key = vec![0; 32];
@@ -46,7 +46,7 @@ pub fn decode_size(size: &[u8]) -> (u16, u16) {
 
     (size_rsa, size_aes)
 }
-pub fn decrypt(rsa: &Rsa, size_rsa: usize, input: &[u8]) -> Result<Packet, Box<::std::error::Error>> {
+pub fn decrypt(input: &[u8], rsa: &Rsa, size_rsa: usize) -> Result<Packet, Box<::std::error::Error>> {
     let mut keyiv = vec![0; size_rsa];
     rsa.private_decrypt(&input[..size_rsa], &mut keyiv, PKCS1_PADDING)?;
     keyiv.truncate(32+16);

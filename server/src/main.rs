@@ -5,10 +5,11 @@ extern crate openssl;
 extern crate tokio_core;
 extern crate tokio_io;
 
+use common::Packet;
 use futures::{Future, Stream};
 use openssl::rsa::Rsa;
 use std::env;
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::rc::Rc;
 use tokio_core::net::{TcpListener, TcpStream};
@@ -124,8 +125,12 @@ fn main() {
     println!("I'm alive!");
 
     let server = listener.incoming().for_each(|(conn, _)| {
-        let bufreader = BufReader::new(conn);
-        handle_client(rsa.clone(), handle.clone(), bufreader);
+        use tokio_io::AsyncRead;
+        let (reader, writer) = conn.split();
+        let bufreader = BufReader::new(reader);
+        let bufwriter = BufWriter::new(writer);
+
+        handle_client(rsa.clone(), handle.clone(), bufreader, bufwriter);
 
         Ok(())
     });
@@ -133,7 +138,12 @@ fn main() {
     core.run(server).expect("Could not run tokio core!");
 }
 
-fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
+fn handle_client(
+        rsa: Rc<Rsa>,
+        handle: Rc<Handle>,
+        bufreader: BufReader<tokio_io::io::ReadHalf<TcpStream>>,
+        bufwriter: BufWriter<tokio_io::io::WriteHalf<TcpStream>>
+    ) {
     let handle_clone = handle.clone();
     let rsa_clone = rsa.clone();
     let length = io::read_exact(bufreader, [0; 4])
@@ -153,7 +163,7 @@ fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStrea
             let lines = io::read_exact(bufreader, vec![0; size_rsa+size_aes])
                 .map_err(|_| ())
                 .and_then(move |(bufreader, bytes)| {
-                    let packet = match common::decrypt(&rsa_clone, size_rsa, &bytes) {
+                    let packet = match common::decrypt(&bytes, &rsa_clone, size_rsa) {
                         Ok(ok) => ok,
                         Err(err) => {
                             eprintln!("Failed to decrypt message from client: {}", err);
@@ -161,15 +171,44 @@ fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStrea
                         }
                     };
 
-                    use common::Packet;
+                    let reply;
+                    let rsa;
+
                     match packet {
+                        Packet::Login(login) => {
+                            reply = Packet::Err(common::ERR_LOGIN_BANNED); // Just a test
+                            rsa = match Rsa::public_key_from_pem(&login.public_key) {
+                                Ok(ok) => ok,
+                                Err(_) => return Ok(()),
+                            };
+                        },
                         Packet::MessageCreate(msg) => {
-                            println!("Decoded: {:?}", msg.text)
-                        }
+                            println!("Decoded: {:?}", msg.text);
+                            return Ok(());
+                        },
                         _ => unimplemented!(),
                     }
 
-                    handle_client(rsa_clone, handle_clone_clone_ugh, bufreader);
+                    let encrypted: Vec<u8> = attempt_or!(common::encrypt(&reply, &rsa), {
+                        println!("Failed to encrypt reply");
+                        return Ok(());
+                    });
+                    let handle_clone_clone_clone_uugghh = handle_clone_clone_ugh.clone();
+                    let write = io::write_all(bufwriter, encrypted)
+                        .map_err(|_| ())
+                        .and_then(move |(mut bufwriter, _)| {
+                            use std::io::Write;
+                            let _ = bufwriter.flush();
+                            handle_client(
+                                rsa_clone,
+                                handle_clone_clone_clone_uugghh,
+                                bufreader,
+                                bufwriter
+                            );
+                            Ok(())
+                        });
+
+                    handle_clone_clone_ugh.spawn(write);
                     Ok(())
                 });
 

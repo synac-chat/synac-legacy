@@ -12,6 +12,9 @@ use std::io;
 pub const DEFAULT_PORT: u16 = 8439;
 pub const RSA_KEY_BIT_LEN: u32 = 3072;
 
+pub const ERR_LOGIN_INVALID: u8 = 0;
+pub const ERR_LOGIN_BANNED:  u8 = 1;
+
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Attribute {
@@ -38,7 +41,7 @@ pub struct Login {
     pub name: String,
     pub password: Option<String>,
     pub token: Option<String>,
-    pub publickey: Vec<u8>
+    pub public_key: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelList {}
@@ -74,7 +77,7 @@ pub struct MessageDelete {
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
-pub struct CommandSend {
+pub struct Command {
     pub author: usize,
     pub recipient: usize,
     pub command: String,
@@ -83,11 +86,16 @@ pub struct CommandSend {
 
 // SERVER PACKETS
 #[derive(Serialize, Deserialize, Debug)]
+pub struct LoginSuccess {
+    pub created: bool,
+    pub token: String
+}
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CommandReceive {
-    author: User,
-    recipient: User,
-    command: String,
-    args: Vec<String>
+    pub author: User,
+    pub recipient: User,
+    pub command: String,
+    pub args: Vec<String>
 }
 
 macro_rules! packet {
@@ -95,7 +103,7 @@ macro_rules! packet {
         #[derive(Serialize, Deserialize, Debug)]
         #[serde(/*tag = "type",*/ rename_all = "snake_case")]
         pub enum Packet {
-            Error(String),
+            Err(u8),
             $($type($type),)+
         }
     }
@@ -110,7 +118,9 @@ packet! {
     MessageCreate,
     MessageUpdate,
     MessageDelete,
-    CommandSend,
+    Command,
+
+    LoginSuccess,
     CommandReceive
 }
 
@@ -123,7 +133,7 @@ pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
 pub fn deserialize_stream<T: io::Read>(buf: T) -> Result<Packet, rmps::decode::Error> {
     rmps::from_read(buf)
 }
-pub fn read<T: io::Read>(rsa: &Rsa, reader: &mut T) -> Result<Packet, Box<std::error::Error>> {
+pub fn read<T: io::Read>(reader: &mut T, rsa: &Rsa) -> Result<Packet, Box<std::error::Error>> {
     let mut buf = [0; 4];
     reader.read_exact(&mut buf)?;
 
@@ -132,10 +142,10 @@ pub fn read<T: io::Read>(rsa: &Rsa, reader: &mut T) -> Result<Packet, Box<std::e
 
     let mut buf = vec![0; size_rsa+size_aes];
     reader.read_exact(&mut buf)?;
-    decrypt(rsa, size_rsa, &buf)
+    decrypt(&buf, rsa, size_rsa)
 }
-pub fn write<T: io::Write>(rsa: &Rsa, packet: &Packet, writer: &mut T) -> Result<(), Box<std::error::Error>> {
-    let encrypted = encrypt(rsa, packet)?;
+pub fn write<T: io::Write>(writer: &mut T, rsa: &Rsa, packet: &Packet) -> Result<(), Box<std::error::Error>> {
+    let encrypted = encrypt(packet, rsa)?;
     writer.write_all(&encrypted)?;
     writer.flush()?;
 
