@@ -29,7 +29,34 @@ macro_rules! attempt_or {
 }
 
 fn main() {
-    let port = env::args().skip(1).next().map(|val| match val.parse() {
+    let db = attempt_or!(rusqlite::Connection::open("data.sqlite"), {
+        eprintln!("SQLite initialization failed.");
+        eprintln!("Is the file corrupt?");
+        eprintln!("Is the file permissions badly configured?");
+        eprintln!("Just guessing here ¯\\_(ツ)_/¯");
+        return;
+    });
+    db.execute("CREATE TABLE IF NOT EXISTS data (
+                type    INTEGER NOT NULL,
+                value   BLOB NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+
+    let mut args = env::args();
+    args.next();
+    match args.next().as_ref().map(|s| &**s) {
+        Some("start") => {},
+        Some("reset-keys") => {
+            db.execute("DELETE FROM data WHERE type=0", &[]).unwrap();
+            println!("Public & Private keys reset.");
+            return;
+        },
+        _ => {
+            println!("Usage: ./unnamed start [port] OR ./unnamed reset-keys");
+            return;
+        }
+    };
+    let port = args.next().map(|val| match val.parse() {
         Ok(ok) => ok,
         Err(_) => {
             eprintln!("Warning: Supplied port is not a valid number.");
@@ -43,18 +70,6 @@ fn main() {
 
     println!("Setting up...");
 
-    let db = attempt_or!(rusqlite::Connection::open("data.sqlite"), {
-        eprintln!("SQLite initialization failed.");
-        eprintln!("Is the file corrupt?");
-        eprintln!("Is the file permissions badly configured?");
-        eprintln!("Just guessing here ¯\\_(ツ)_/¯");
-        return;
-    });
-    db.execute("CREATE TABLE IF NOT EXISTS data (
-                type    INTEGER NOT NULL,
-                value   BLOB NOT NULL
-                )", &[])
-        .expect("SQLite table creation failed");
     let mut statement = db.prepare("SELECT value FROM data WHERE type = 0").unwrap();
     let mut rows = statement.query(&[]).unwrap();
 
@@ -74,6 +89,7 @@ fn main() {
             return;
         });
         println!("In case you forgot your public key, it's:");
+        println!();
         println!("{}", string);
     } else {
         // Generate new public and private keys.
