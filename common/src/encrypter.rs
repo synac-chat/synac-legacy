@@ -3,6 +3,14 @@ use openssl::rand;
 use openssl::rsa::{Rsa, PKCS1_PADDING};
 use openssl::symm::{self, Cipher};
 
+pub fn encode_size(size_rsa: u16, size_aes: u16) -> [u8; 4] {
+    [
+        (size_rsa >> 8)  as u8,
+        (size_rsa % 256) as u8,
+        (size_aes >> 8)  as u8,
+        (size_aes % 256) as u8
+    ]
+}
 pub fn encrypt(rsa: &Rsa, input: &Packet) -> Result<Vec<u8>, Box<::std::error::Error>> {
     let encoded = serialize(input)?;
 
@@ -23,16 +31,21 @@ pub fn encrypt(rsa: &Rsa, input: &Packet) -> Result<Vec<u8>, Box<::std::error::E
     rsa.public_encrypt(&key, &mut encrypted_rsa, PKCS1_PADDING)?;
 
     let mut encrypted = Vec::with_capacity(4+size_rsa+size_aes);
-    encrypted.push((size_rsa >> 8)  as u8);
-    encrypted.push((size_rsa % 256) as u8);
-    encrypted.push((size_aes >> 8)  as u8);
-    encrypted.push((size_aes % 256) as u8);
+    encrypted.extend(encode_size(size_rsa as u16, size_aes as u16).into_iter());
     encrypted.append(&mut encrypted_rsa);
     encrypted.append(&mut encrypted_aes);
 
     Ok(encrypted)
 }
 
+pub fn decode_size(size: &[u8]) -> (u16, u16) {
+    assert_eq!(size.len(), 4);
+
+    let size_rsa = ((size[0] as u16) << 8) + size[1] as u16;
+    let size_aes = ((size[2] as u16) << 8) + size[3] as u16;
+
+    (size_rsa, size_aes)
+}
 pub fn decrypt(rsa: &Rsa, size_rsa: usize, input: &[u8]) -> Result<Packet, Box<::std::error::Error>> {
     let mut keyiv = vec![0; size_rsa];
     rsa.private_decrypt(&input[..size_rsa], &mut keyiv, PKCS1_PADDING)?;

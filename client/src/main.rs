@@ -152,7 +152,7 @@ fn main() {
                             &[&addr.to_string(), &public_key]
                         ).unwrap();
                     }
-                    let rsa = match Rsa::public_key_from_pem(&public_key) {
+                    let rsa_encrypt = match Rsa::public_key_from_pem(&public_key) {
                         Ok(ok) => ok,
                         Err(err) => {
                             eprintln!("Could not initiate RSA.");
@@ -161,14 +161,24 @@ fn main() {
                             continue;
                         }
                     };
-                    stream = Some((rsa, match TcpStream::connect(addr) {
+                    let rsa_decrypt = match Rsa::generate(common::RSA_KEY_BIT_LEN) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            eprintln!("Could not initiate RSA.");
+                            eprintln!("Try again?");
+                            eprintln!("{}", err);
+                            continue;
+                        }
+                    };
+                    let tcp = match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!(screen, "Could not connect!");
                             println!(screen, "{}", err);
                             continue;
                         }
-                    }));
+                    };
+                    stream = Some((rsa_encrypt, rsa_decrypt, tcp));
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -190,26 +200,16 @@ fn main() {
                 println!(screen, "You're not connected to a server.");
                 continue;
             },
-            Some((ref mut rsa, ref mut stream)) => {
+            Some((ref mut rsa_encrypt, _, ref mut stream)) => {
                 let packet = common::Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
                     text: input.into_bytes()
                 });
 
-                let encrypted = match common::encrypt(rsa, &packet) {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        println!(screen, "Sending failed");
-                        println!(screen, "{}", err);
-                        continue;
-                    }
-                };
-
-                if let Err(err) = stream.write_all(&encrypted).and_then(|_| stream.flush()) {
-                    println!(screen, "Could not send message.");
+                if let Err(err) = common::write(rsa_encrypt, &packet, stream) {
+                    println!(screen, "Failed to deliver message.");
                     println!(screen, "{}", err);
-                    continue;
-                };
+                }
             }
         }
     }

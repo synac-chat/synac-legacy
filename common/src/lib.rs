@@ -6,9 +6,11 @@ extern crate serde;
 pub mod encrypter;
 pub use encrypter::*;
 
+use openssl::rsa::Rsa;
 use std::io;
 
 pub const DEFAULT_PORT: u16 = 8439;
+pub const RSA_KEY_BIT_LEN: u32 = 3072;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,16 +34,11 @@ pub struct Channel {
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Register {
-    pub name: String,
-    pub password: String,
-    pub publickey: Vec<u8>
-}
-#[derive(Serialize, Deserialize, Debug)]
 pub struct Login {
     pub name: String,
     pub password: Option<String>,
-    pub token: Option<String>
+    pub token: Option<String>,
+    pub publickey: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelList {}
@@ -104,7 +101,6 @@ macro_rules! packet {
     }
 }
 packet! {
-    Register,
     Login,
     ChannelList,
     ChannelCreate,
@@ -126,4 +122,22 @@ pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
 }
 pub fn deserialize_stream<T: io::Read>(buf: T) -> Result<Packet, rmps::decode::Error> {
     rmps::from_read(buf)
+}
+pub fn read<T: io::Read>(rsa: &Rsa, reader: &mut T) -> Result<Packet, Box<std::error::Error>> {
+    let mut buf = [0; 4];
+    reader.read_exact(&mut buf)?;
+
+    let (size_rsa, size_aes) = decode_size(&buf);
+    let (size_rsa, size_aes) = (size_rsa as usize, size_aes as usize);
+
+    let mut buf = vec![0; size_rsa+size_aes];
+    reader.read_exact(&mut buf)?;
+    decrypt(rsa, size_rsa, &buf)
+}
+pub fn write<T: io::Write>(rsa: &Rsa, packet: &Packet, writer: &mut T) -> Result<(), Box<std::error::Error>> {
+    let encrypted = encrypt(rsa, packet)?;
+    writer.write_all(&encrypted)?;
+    writer.flush()?;
+
+    Ok(())
 }

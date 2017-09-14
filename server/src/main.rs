@@ -91,7 +91,7 @@ fn main() {
         println!("{}", string);
     } else {
         // Generate new public and private keys.
-        rsa = Rsa::generate(3072).expect("Failed to generate public/private key");
+        rsa = Rsa::generate(common::RSA_KEY_BIT_LEN).expect("Failed to generate public/private key");
         let private = rsa.private_key_to_pem().unwrap();
         let public = rsa.public_key_to_pem().unwrap();
         db.execute("INSERT INTO data (type, value) VALUES (0, ?)", &[&private]).unwrap();
@@ -136,11 +136,11 @@ fn main() {
 fn handle_client(rsa: Rc<Rsa>, handle: Rc<Handle>, bufreader: BufReader<TcpStream>) {
     let handle_clone = handle.clone();
     let rsa_clone = rsa.clone();
-    let length = io::read_exact(bufreader, vec![0; 4])
+    let length = io::read_exact(bufreader, [0; 4])
         .map_err(|_| ())
         .and_then(move |(bufreader, bytes)| {
-            let size_rsa = ((bytes[0] as usize) << 8) + bytes[1] as usize;
-            let size_aes = ((bytes[2] as usize) << 8) + bytes[3] as usize;
+            let (size_rsa, size_aes) = common::decode_size(&bytes);
+            let (size_rsa, size_aes) = (size_rsa as usize, size_aes as usize);
 
             println!("Size RSA: {}", size_rsa);
             println!("Size AES: {}", size_aes);
