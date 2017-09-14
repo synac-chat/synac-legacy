@@ -68,8 +68,8 @@ fn main() {
 
     println!("Setting up...");
 
-    let mut statement = db.prepare("SELECT value FROM data WHERE type = 0").unwrap();
-    let mut rows = statement.query(&[]).unwrap();
+    let mut stmt = db.prepare("SELECT value FROM data WHERE type = 0").unwrap();
+    let mut rows = stmt.query(&[]).unwrap();
 
     let rsa;
 
@@ -94,7 +94,7 @@ fn main() {
         rsa = Rsa::generate(3072).expect("Failed to generate public/private key");
         let private = rsa.private_key_to_pem().unwrap();
         let public = rsa.public_key_to_pem().unwrap();
-        db.execute("INSERT INTO data (type, value) VALUES (0, ?1)", &[&private]).unwrap();
+        db.execute("INSERT INTO data (type, value) VALUES (0, ?)", &[&private]).unwrap();
         // be friendly
         let string = attempt_or!(std::str::from_utf8(&public), {
             eprintln!("Oh no! Text isn't valid UTF-8!");

@@ -1,4 +1,5 @@
 extern crate openssl;
+extern crate rusqlite;
 extern crate rustyline;
 extern crate termion;
 extern crate common;
@@ -24,6 +25,21 @@ macro_rules! flush {
 }
 
 fn main() {
+    let db = match rusqlite::Connection::open("data.sqlite") {
+        Ok(ok) => ok,
+        Err(err) => {
+            eprintln!("Failed to open database.");
+            eprintln!("{}", err);
+            return;
+        }
+    };
+
+    db.execute("CREATE TABLE IF NOT EXISTS servers (
+                    ip      TEXT NOT NULL,
+                    key     BLOB NOT NULL
+                )", &[])
+        .expect("Couldn't create SQLite table");
+
     #[cfg(unix)]
     let mut nick = env::var("USER").unwrap_or("unknown".to_string());
     #[cfg(windows)]
@@ -92,28 +108,51 @@ fn main() {
                         println!(screen, "Still going? It's <ip[:port]>, not <ip[:port[:foo[:bar[:whatever]]]]>...");
                         continue;
                     }
-                    println!(screen, "To securely connect, we need some data from the server (\"public key\").");
-                    println!(screen, "The server owner should have given you this.");
-                    println!(screen, "Once you have it, enter it here and end it by typing \"END\" on a new line.");
-                    println!(screen);
-                    flush!(screen);
-                    let mut public_key = String::new();
-                    loop {
-                        let result = editor.readline("");
-                        let input = match result.as_ref().map(|s| &**s) {
-                            Ok("END") |
-                            Err(&ReadlineError::Eof) => break,
-                            Ok(ok) => ok,
-                            Err(err) => {
-                                eprintln!("Couldn't read line: {}", err);
-                                break;
-                            }
-                        };
+                    use std::net::ToSocketAddrs;
+                    let addr = match (ip, port).to_socket_addrs().ok().and_then(|mut iter| iter.next()) {
+                        Some(some) => some,
+                        None => {
+                            println!(screen, "Not a valid socket address.");
+                            continue;
+                        }
+                    };
 
-                        public_key.push_str(&input);
-                        public_key.push('\n');
+                    let mut stmt = db.prepare("SELECT key FROM servers WHERE ip = ?").unwrap();
+                    let mut rows = stmt.query(&[&addr.to_string()]).unwrap();
+
+                    let public_key;
+                    if let Some(row) = rows.next() {
+                        let row = row.unwrap();
+                        public_key = row.get(0);
+                    } else {
+                        println!(screen, "To securely connect, we need some data from the server (\"public key\").");
+                        println!(screen, "The server owner should have given you this.");
+                        println!(screen, "Once you have it, enter it here and end it by typing \"END\" on a new line.");
+                        println!(screen);
+                        flush!(screen);
+                        let mut public_key_string = String::new();
+                        loop {
+                            let result = editor.readline("");
+                            let input = match result.as_ref().map(|s| &**s) {
+                                Ok("END") |
+                                Err(&ReadlineError::Eof) => break,
+                                Ok(ok) => ok,
+                                Err(err) => {
+                                    eprintln!("Couldn't read line: {}", err);
+                                    break;
+                                }
+                            };
+
+                            public_key_string.push_str(&input);
+                            public_key_string.push('\n');
+                        }
+                        public_key = public_key_string.into_bytes();
+                        db.execute(
+                            "INSERT INTO servers (ip, key) VALUES (?, ?)",
+                            &[&addr.to_string(), &public_key]
+                        ).unwrap();
                     }
-                    let rsa = match Rsa::public_key_from_pem(public_key.as_bytes()) {
+                    let rsa = match Rsa::public_key_from_pem(&public_key) {
                         Ok(ok) => ok,
                         Err(err) => {
                             eprintln!("Could not initiate RSA.");
@@ -122,7 +161,7 @@ fn main() {
                             continue;
                         }
                     };
-                    stream = Some((rsa, match TcpStream::connect((ip, port)) {
+                    stream = Some((rsa, match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!(screen, "Could not connect!");

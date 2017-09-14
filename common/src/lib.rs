@@ -32,10 +32,6 @@ pub struct Channel {
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Exists {
-    pub name: String
-}
-#[derive(Serialize, Deserialize, Debug)]
 pub struct Register {
     pub name: String,
     pub password: String,
@@ -108,7 +104,6 @@ macro_rules! packet {
     }
 }
 packet! {
-    Exists,
     Register,
     Login,
     ChannelList,
