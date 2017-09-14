@@ -193,7 +193,7 @@ fn handle_client(
 
                     match packet {
                         Packet::Login(login) => {
-                            let mut token = [0; 32];
+                            let mut token = [0; 64];
                             attempt_or!(rand::rand_bytes(&mut token), {
                                 println!("Failed to generate random bytes for a token.");
                                 return Ok(());
