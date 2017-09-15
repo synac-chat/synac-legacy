@@ -7,6 +7,7 @@ extern crate common;
 mod parser;
 
 use common::Packet;
+use openssl::ssl::{SslMethod, SslConnectorBuilder, SSL_VERIFY_PEER};
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Write};
@@ -53,6 +54,9 @@ fn main() {
     #[cfg(not(any(unix, windows)))]
     let mut nick = "unknown".to_string();
 
+    let ssl = SslConnectorBuilder::new(SslMethod::tls())
+        .expect("Failed to create SSL connector D:")
+        .build();
     let mut stream = None;
 
     let mut stdin = io::stdin();
@@ -127,38 +131,65 @@ fn main() {
                     } else {
                         println!(stdout, "To securely connect, we need some data from the server (\"public key\").");
                         println!(stdout, "The server owner should have given you this.");
-                        println!(stdout, "Once you have it, enter it here and then type \"END\" on a new line.");
-                        println!(stdout);
+                        println!(stdout, "Once you have it, enter it here:");
                         flush!(stdout);
-                        let mut public_key_string = String::new();
-                        loop {
-                            let result = editor.readline("");
-                            let input = match result.as_ref().map(|s| &**s) {
-                                Ok("END") |
-                                Err(&ReadlineError::Eof) => break,
-                                Ok(ok) => ok,
-                                Err(err) => {
-                                    eprintln!("Couldn't read line: {}", err);
-                                    break;
-                                }
-                            };
+                        let result = editor.readline("");
+                        public_key = match result {
+                            Err(ReadlineError::Eof) |
+                            Err(ReadlineError::Interrupted) => break,
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                eprintln!("Couldn't read line: {}", err);
+                                break;
+                            }
+                        };
 
-                            public_key_string.push_str(&input);
-                            public_key_string.push('\n');
-                        }
-                        public_key = public_key_string.into_bytes();
                         db.execute(
                             "INSERT INTO servers (ip, key) VALUES (?, ?)",
                             &[&addr.to_string(), &public_key]
                         ).unwrap();
                     }
                     // TODO use public_key
-                    let mut tcp = match TcpStream::connect(addr) {
+                    let stream_ = match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!(stdout, "Could not connect!");
                             println!(stdout, "{}", err);
                             continue;
+                        }
+                    };
+                    let mut stream_ = {
+                        let mut config = ssl.configure().expect("Failed to configure SSL connector");
+                        config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
+                            match cert.current_cert() {
+                                Some(cert) => match cert.public_key() {
+                                    Ok(pkey) => match pkey.public_key_to_pem() {
+                                        Ok(pem) => {
+                                            let digest = openssl::sha::sha256(&pem);
+                                            let mut digest_str = String::with_capacity(64);
+                                            for byte in &digest {
+                                                digest_str.push_str(&format!("{:X}", byte));
+                                            }
+                                            println!(io::stdout(), "{}", digest_str);
+                                            use std::ascii::AsciiExt;
+                                            public_key.trim().eq_ignore_ascii_case(&digest_str)
+                                        },
+                                        Err(_) => false
+                                    },
+                                    Err(_) => false
+                                },
+                                None => false
+                            }
+                        });
+
+                        match
+config.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(stream_)
+                        {
+                            Ok(ok) => ok,
+                            Err(_) => {
+                                println!(stdout, "Faild to validate certificate");
+                                continue;
+                            }
                         }
                     };
 
@@ -171,13 +202,13 @@ fn main() {
                             token: Some(token.clone())
                         });
 
-                        if let Err(err) = common::write(&mut tcp, &packet) {
+                        if let Err(err) = common::write(&mut stream_, &packet) {
                             println!(stdout, "Could not request login");
                             println!(stdout, "{}", err);
                             continue;
                         }
 
-                        match common::read(&mut tcp) {
+                        match common::read(&mut stream_) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 success = true;
                                 if let Some(id) = login.id {
@@ -238,13 +269,13 @@ fn main() {
                             token: None
                         });
 
-                        if let Err(err) = common::write(&mut tcp, &packet) {
+                        if let Err(err) = common::write(&mut stream_, &packet) {
                             println!(stdout, "Could not request login");
                             println!(stdout, "{}", err);
                             continue;
                         }
 
-                        match common::read(&mut tcp) {
+                        match common::read(&mut stream_) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 db.execute(
                                     "UPDATE servers SET token = ? WHERE ip = ?",
@@ -282,7 +313,7 @@ fn main() {
                             }
                         }
                     }
-                    stream = Some(tcp);
+                    stream = Some(stream_);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");

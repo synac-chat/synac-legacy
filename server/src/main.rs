@@ -5,16 +5,19 @@ extern crate openssl;
 extern crate rusqlite;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_openssl;
 
 use common::Packet;
 use futures::{Future, Stream};
 use openssl::rand;
-// TODO use openssl::pkcs12::Pkcs12;
-// TODO use openssl::ssl::{SslMethod, SslAcceptorBuilder, SslStream};
+use openssl::pkcs12::Pkcs12;
+use openssl::ssl::{SslMethod, SslAcceptorBuilder};
+use tokio_openssl::{SslAcceptorExt, SslStream};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
-use std::io::{BufReader, BufWriter};
+use std::fs::File;
+use std::io::{Read, BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::rc::Rc;
 use tokio_core::net::{TcpListener, TcpStream};
@@ -84,6 +87,50 @@ fn main() {
 
     println!("Setting up...");
 
+    let identity = {
+        let mut file = attempt_or!(File::open("cert.pfx"), {
+            eprintln!("Failed to open certificate file.");
+            eprintln!("Are you in the right directory?");
+            eprintln!("Do I have the required permission to read that file?");
+            return;
+        });
+        let mut data = Vec::new();
+        attempt_or!(file.read_to_end(&mut data), {
+            eprintln!("Failed to read from certificate file.");
+            eprintln!("I have no idea how this could happen...");
+            return;
+        });
+        let identity = attempt_or!(Pkcs12::from_der(&data), {
+            eprintln!("Failed to deserialize certificate file.");
+            eprintln!("Is the it corrupt?");
+            return;
+        });
+        attempt_or!(identity.parse(""), {
+            eprintln!("Failed to parse certificate file.");
+            eprintln!("Is the it corrupt?");
+            eprintln!("Did you password protect it?");
+            return;
+        })
+    };
+    let ssl = SslAcceptorBuilder::mozilla_intermediate(
+        SslMethod::tls(),
+        &identity.pkey,
+        &identity.cert,
+        &identity.chain
+    ).expect("Creating SSL acceptor failed D:").build();
+
+    {
+        let pem = openssl::sha::sha256(&identity.pkey.public_key_to_pem().unwrap());
+        let mut pem_str = String::with_capacity(64);
+        for byte in &pem {
+            pem_str.push_str(&format!("{:X}", byte));
+        }
+        println!("Almost there! To secure your users' connection,");
+        println!("you will have to send a piece of data manually.");
+        println!("The text is as follows:");
+        println!("{}", pem_str);
+    }
+
     let mut core = Core::new().expect("Could not start tokio core!");
     let handle = core.handle();
     let listener = attempt_or!(TcpListener::bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port), &handle), {
@@ -101,34 +148,52 @@ fn main() {
 
     let server = listener.incoming().for_each(|(conn, ip)| {
         use tokio_io::AsyncRead;
-        let (reader, writer) = conn.split();
-        let reader = BufReader::new(reader);
-        let writer = BufWriter::new(writer);
 
-        sessions.borrow_mut().insert(ip.ip(), Session {
-            id: None,
-            writer: Some(writer)
+        let handle_clone = handle.clone();
+        let db_clone = db.clone();
+        let sessions_clone = sessions.clone();
+        let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
+            let (reader, writer) = conn.split();
+            let reader = BufReader::new(reader);
+            let writer = BufWriter::new(writer);
+
+            sessions_clone.borrow_mut().insert(ip.ip(), Session {
+                id: None,
+                writer: Some(writer)
+            });
+
+            handle_client(
+                handle_clone,
+                db_clone,
+                sessions_clone,
+                ip.ip(),
+                reader
+            );
+
+            Ok(())
         });
-
-        handle_client(
-            handle.clone(),
-            db.clone(),
-            sessions.clone(),
-            ip.ip(),
-            reader
-        );
-
+        handle.spawn(accept);
         Ok(())
     });
 
     core.run(server).expect("Could not run tokio core!");
 }
 
+fn gen_token() -> Result<String, openssl::error::ErrorStack> {
+    let mut token = vec![0; 64];
+    rand::rand_bytes(&mut token)?;
+    for byte in token.iter_mut() {
+        *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
+    }
+
+    Ok(unsafe { String::from_utf8_unchecked(token) })
+}
+
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 struct Session {
     id: Option<usize>,
-    writer: Option<BufWriter<tokio_io::io::WriteHalf<TcpStream>>>
+    writer: Option<BufWriter<tokio_io::io::WriteHalf<SslStream<TcpStream>>>>
 }
 
 fn handle_client(
@@ -136,7 +201,7 @@ fn handle_client(
         db: Rc<rusqlite::Connection>,
         sessions: Rc<RefCell<HashMap<IpAddr, Session>>>,
         ip: IpAddr,
-        reader: BufReader<tokio_io::io::ReadHalf<TcpStream>>
+        reader: BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>
     ) {
     macro_rules! close {
         () => {
@@ -314,14 +379,4 @@ fn handle_client(
         });
 
     handle.spawn(length);
-}
-
-fn gen_token() -> Result<String, openssl::error::ErrorStack> {
-    let mut token = vec![0; 64];
-    rand::rand_bytes(&mut token)?;
-    for byte in token.iter_mut() {
-        *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
-    }
-
-    Ok(unsafe { String::from_utf8_unchecked(token) })
 }
