@@ -7,11 +7,10 @@ extern crate common;
 mod parser;
 
 use common::Packet;
-use openssl::rsa::Rsa;
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use termion::screen::AlternateScreen;
 
 macro_rules! print {
@@ -103,6 +102,11 @@ fn main() {
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
+                    if stream.is_some() {
+                        println!(stdout, "Please disconnect first.");
+                        continue;
+                    }
+
                     let addr = match parse_ip(&args[0]) {
                         Some(some) => some,
                         None => {
@@ -123,7 +127,7 @@ fn main() {
                     } else {
                         println!(stdout, "To securely connect, we need some data from the server (\"public key\").");
                         println!(stdout, "The server owner should have given you this.");
-                        println!(stdout, "Once you have it, enter it here and end it by typing \"END\" on a new line.");
+                        println!(stdout, "Once you have it, enter it here and then type \"END\" on a new line.");
                         println!(stdout);
                         flush!(stdout);
                         let mut public_key_string = String::new();
@@ -148,24 +152,7 @@ fn main() {
                             &[&addr.to_string(), &public_key]
                         ).unwrap();
                     }
-                    let rsa_encrypt = match Rsa::public_key_from_pem(&public_key) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            eprintln!("Could not initiate RSA.");
-                            eprintln!("Is that weird thing you entered invalid? Just a guess.");
-                            eprintln!("Scary debug details: {}", err);
-                            continue;
-                        }
-                    };
-                    let rsa_decrypt = match Rsa::generate(common::RSA_KEY_BIT_LEN) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            eprintln!("Could not initiate RSA.");
-                            eprintln!("Try again?");
-                            eprintln!("{}", err);
-                            continue;
-                        }
-                    };
+                    // TODO use public_key
                     let mut tcp = match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
@@ -174,7 +161,6 @@ fn main() {
                             continue;
                         }
                     };
-                    let public_key = rsa_decrypt.public_key_to_pem().unwrap();
 
                     let mut success = false;
                     if let Some(token) = token {
@@ -182,23 +168,22 @@ fn main() {
                             bot: false,
                             name: nick.clone(),
                             password: None,
-                            public_key: public_key.clone(),
                             token: Some(token.clone())
                         });
 
-                        if let Err(err) = common::write(&mut tcp, &rsa_encrypt, &packet) {
+                        if let Err(err) = common::write(&mut tcp, &packet) {
                             println!(stdout, "Could not request login");
                             println!(stdout, "{}", err);
                             continue;
                         }
 
-                        match common::read(&mut tcp, &rsa_decrypt) {
+                        match common::read(&mut tcp) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 success = true;
                                 if let Some(id) = login.id {
                                     println!(stdout, "Logged in as user #{}", id);
                                 } else {
-                                    println!(stdout, "Tried to log in with your token: Apparently account was created.");
+                                    println!(stdout, "Tried to log in with your token: Apparently an account was created.");
                                     println!(stdout, "I think you should stay away from this server. It's weird.");
                                     continue;
                                 }
@@ -250,17 +235,16 @@ fn main() {
                             bot: false,
                             name: nick.clone(),
                             password: Some(pass),
-                            public_key: public_key,
                             token: None
                         });
 
-                        if let Err(err) = common::write(&mut tcp, &rsa_encrypt, &packet) {
+                        if let Err(err) = common::write(&mut tcp, &packet) {
                             println!(stdout, "Could not request login");
                             println!(stdout, "{}", err);
                             continue;
                         }
 
-                        match common::read(&mut tcp, &rsa_decrypt) {
+                        match common::read(&mut tcp) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 db.execute(
                                     "UPDATE servers SET token = ? WHERE ip = ?",
@@ -298,12 +282,12 @@ fn main() {
                             }
                         }
                     }
-                    stream = Some((tcp, rsa_encrypt, rsa_decrypt));
+                    stream = Some(tcp);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
-                    if let Some((ref mut stream, ref rsa_encrypt, _)) = stream {
-                        let _ = common::write(stream, &rsa_encrypt, &Packet::Close);
+                    if let Some(ref mut stream) = stream {
+                        let _ = common::write(stream, &Packet::Close);
                     } else {
                         println!(stdout, "You're not connected to a server");
                         continue;
@@ -333,13 +317,13 @@ fn main() {
                 println!(stdout, "You're not connected to a server");
                 continue;
             },
-            Some((ref mut stream, ref mut rsa_encrypt, _)) => {
+            Some(ref mut stream) => {
                 let packet = Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
                     text: input.into_bytes()
                 });
 
-                if let Err(err) = common::write(stream, rsa_encrypt, &packet) {
+                if let Err(err) = common::write(stream, &packet) {
                     println!(stdout, "Failed to deliver message");
                     println!(stdout, "{}", err);
                 }
@@ -365,14 +349,17 @@ fn parse_ip(input: &str) -> Option<SocketAddr> {
         return None;
     }
 
-    let ip = if ip == "localhost" {
-        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
-    } else {
-        match ip.parse::<IpAddr>() {
-            Ok(ip) => ip,
-            Err(_) => return None
-        }
-    };
-
-    Some(SocketAddr::new(ip, port))
+    // let ip = if ip == "localhost" {
+    //     IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+    // } else {
+    //     match ip.parse::<IpAddr>() {
+    //         Ok(ip) => ip,
+    //         Err(_) => return None
+    //     }
+    // };
+    use std::net::ToSocketAddrs;
+    match (ip, port).to_socket_addrs() {
+        Ok(ok) => ok,
+        Err(_) => return None
+    }.next()
 }

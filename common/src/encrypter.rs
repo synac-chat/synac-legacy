@@ -1,16 +1,12 @@
+// BROKEN FILE.
+// DO NOT USE.
+// Might be used for E2E later.
+
 use *;
 use openssl::rand;
 use openssl::rsa::{Rsa, PKCS1_PADDING};
 use openssl::symm::{self, Cipher};
 
-pub fn encode_size(size_rsa: u16, size_aes: u16) -> [u8; 4] {
-    [
-        (size_rsa >> 8)  as u8,
-        (size_rsa % 256) as u8,
-        (size_aes >> 8)  as u8,
-        (size_aes % 256) as u8
-    ]
-}
 pub fn encrypt(input: &Packet, rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Error>> {
     let encoded = serialize(input)?;
 
@@ -40,14 +36,6 @@ pub fn encrypt(input: &Packet, rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::E
     Ok(encrypted)
 }
 
-pub fn decode_size(size: &[u8]) -> (u16, u16) {
-    assert_eq!(size.len(), 4);
-
-    let size_rsa = ((size[0] as u16) << 8) + size[1] as u16;
-    let size_aes = ((size[2] as u16) << 8) + size[3] as u16;
-
-    (size_rsa, size_aes)
-}
 pub fn decrypt(input: &[u8], rsa: &Rsa, size_rsa: usize) -> Result<Packet, Box<::std::error::Error>> {
     let mut keyiv = vec![0; size_rsa];
     rsa.private_decrypt(&input[..size_rsa], &mut keyiv, PKCS1_PADDING)?;

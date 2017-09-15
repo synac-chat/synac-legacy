@@ -1,12 +1,7 @@
-extern crate openssl;
 extern crate rmp_serde as rmps;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 
-pub mod encrypter;
-pub use encrypter::*;
-
-use openssl::rsa::Rsa;
 use std::io;
 
 pub const DEFAULT_PORT: u16 = 8439;
@@ -43,7 +38,6 @@ pub struct Login {
     pub bot: bool,
     pub name: String,
     pub password: Option<String>,
-    pub public_key: Vec<u8>,
     pub token: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -139,20 +133,51 @@ pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
 pub fn deserialize_stream<T: io::Read>(buf: T) -> Result<Packet, rmps::decode::Error> {
     rmps::from_read(buf)
 }
-pub fn read<T: io::Read>(reader: &mut T, rsa: &Rsa) -> Result<Packet, Box<std::error::Error>> {
-    let mut buf = [0; 4];
-    reader.read_exact(&mut buf)?;
-
-    let (size_rsa, size_aes) = decode_size(&buf);
-    let (size_rsa, size_aes) = (size_rsa as usize, size_aes as usize);
-
-    let mut buf = vec![0; size_rsa+size_aes];
-    reader.read_exact(&mut buf)?;
-    decrypt(&buf, rsa, size_rsa)
+pub fn encode_u16(input: u16) -> [u8; 2] {
+    [
+        (input >> 8)  as u8,
+        (input % 256) as u8
+    ]
 }
-pub fn write<T: io::Write>(writer: &mut T, rsa: &Rsa, packet: &Packet) -> Result<(), Box<std::error::Error>> {
-    let encrypted = encrypt(packet, rsa)?;
-    writer.write_all(&encrypted)?;
+pub fn decode_u16(bytes: &[u8]) -> u16 {
+    assert_eq!(bytes.len(), 2);
+
+    ((bytes[0] as u16) << 8) + bytes[1] as u16
+}
+pub fn read<T: io::Read>(reader: &mut T) -> Result<Packet, Box<std::error::Error>> {
+    let mut buf = [0; 2];
+    reader.read_exact(&mut buf)?;
+
+    let size = decode_u16(&buf) as usize;
+    let mut buf = vec![0; size];
+    reader.read_exact(&mut buf)?;
+
+    Ok(deserialize(&buf)?)
+}
+
+#[derive(Debug)]
+pub struct ErrPacketTooBig;
+
+impl std::error::Error for ErrPacketTooBig {
+    fn description(&self) -> &str {
+        "Packet size must fit into an u16"
+    }
+}
+impl std::fmt::Display for ErrPacketTooBig {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use std::error::Error;
+        write!(f, "{}", self.description())
+    }
+}
+
+pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Box<std::error::Error>> {
+    let buf = serialize(packet)?;
+    if buf.len() > std::u16::MAX as usize {
+        return Err(Box::new(ErrPacketTooBig));
+    }
+    let size = encode_u16(buf.len() as u16);
+    writer.write_all(&size)?;
+    writer.write_all(&buf)?;
     writer.flush()?;
 
     Ok(())

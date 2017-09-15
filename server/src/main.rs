@@ -9,7 +9,8 @@ extern crate tokio_io;
 use common::Packet;
 use futures::{Future, Stream};
 use openssl::rand;
-use openssl::rsa::Rsa;
+// TODO use openssl::pkcs12::Pkcs12;
+// TODO use openssl::ssl::{SslMethod, SslAcceptorBuilder, SslStream};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
@@ -29,13 +30,6 @@ macro_rules! attempt_or {
             }
         }
     }
-}
-
-pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-struct Session {
-    id: usize,
-    rsa: Rsa
 }
 
 fn main() {
@@ -90,49 +84,6 @@ fn main() {
 
     println!("Setting up...");
 
-    let rsa;
-    {
-        let mut stmt = db.prepare("SELECT value FROM data WHERE type = 0").unwrap();
-        let mut rows = stmt.query(&[]).unwrap();
-
-        if let Some(row) = rows.next() {
-            let row = row.unwrap();
-            rsa = attempt_or!(Rsa::private_key_from_pem(&row.get::<_, Vec<_>>(0)), {
-                eprintln!("Could not use private key.");
-                eprintln!("Is it invalid? D:");
-                return;
-            });
-            let public = rsa.public_key_to_pem().unwrap();
-            let string = attempt_or!(std::str::from_utf8(&public), {
-                eprintln!("Oh no! Text isn't valid UTF-8!");
-                eprintln!("Please contact my developer!");
-                return;
-            });
-            println!("In case you forgot your public key, it's:");
-            println!();
-            println!("{}", string);
-        } else {
-            // Generate new public and private keys.
-            rsa = Rsa::generate(common::RSA_KEY_BIT_LEN).expect("Failed to generate public/private key");
-            let private = rsa.private_key_to_pem().unwrap();
-            let public = rsa.public_key_to_pem().unwrap();
-            db.execute("INSERT INTO data (type, value) VALUES (0, ?)", &[&private]).unwrap();
-            // be friendly
-            let string = attempt_or!(std::str::from_utf8(&public), {
-                eprintln!("Oh no! Text isn't valid UTF-8!");
-                eprintln!("Please contact my developer!");
-                return;
-            });
-            println!("Almost there! To secure your users' connection,");
-            println!("you will have to *securely* send a piece of data manually.");
-            println!("Example #1: Write it down and give it to them IRL.");
-            println!("Example #2: Send it in *parts* over multiple applications.");
-            println!("The text is as follows: ");
-            println!();
-            println!("{}", string);
-        }
-    }
-
     let mut core = Core::new().expect("Could not start tokio core!");
     let handle = core.handle();
     let listener = attempt_or!(TcpListener::bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port), &handle), {
@@ -141,7 +92,6 @@ fn main() {
         return;
     });
 
-    let rsa = Rc::new(rsa);
     let handle = Rc::new(handle);
     let db = Rc::new(db);
 
@@ -152,17 +102,20 @@ fn main() {
     let server = listener.incoming().for_each(|(conn, ip)| {
         use tokio_io::AsyncRead;
         let (reader, writer) = conn.split();
-        let bufreader = BufReader::new(reader);
-        let bufwriter = BufWriter::new(writer);
+        let reader = BufReader::new(reader);
+        let writer = BufWriter::new(writer);
+
+        sessions.borrow_mut().insert(ip.ip(), Session {
+            id: None,
+            writer: Some(writer)
+        });
 
         handle_client(
-            rsa.clone(),
             handle.clone(),
             db.clone(),
             sessions.clone(),
             ip.ip(),
-            bufreader,
-            bufwriter,
+            reader
         );
 
         Ok(())
@@ -171,14 +124,19 @@ fn main() {
     core.run(server).expect("Could not run tokio core!");
 }
 
+pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+struct Session {
+    id: Option<usize>,
+    writer: Option<BufWriter<tokio_io::io::WriteHalf<TcpStream>>>
+}
+
 fn handle_client(
-        rsa: Rc<Rsa>,
         handle: Rc<Handle>,
         db: Rc<rusqlite::Connection>,
         sessions: Rc<RefCell<HashMap<IpAddr, Session>>>,
         ip: IpAddr,
-        bufreader: BufReader<tokio_io::io::ReadHalf<TcpStream>>,
-        bufwriter: BufWriter<tokio_io::io::WriteHalf<TcpStream>>
+        reader: BufReader<tokio_io::io::ReadHalf<TcpStream>>
     ) {
     macro_rules! close {
         () => {
@@ -189,40 +147,37 @@ fn handle_client(
     }
 
     let handle_clone = handle.clone();
-    let rsa_clone = rsa.clone();
-    let length = io::read_exact(bufreader, [0; 4])
+    let length = io::read_exact(reader, [0; 2])
         .map_err(|_| ())
-        .and_then(move |(bufreader, bytes)| {
-            let (size_rsa, size_aes) = common::decode_size(&bytes);
-            let (size_rsa, size_aes) = (size_rsa as usize, size_aes as usize);
+        .and_then(move |(reader, bytes)| {
+            let size = common::decode_u16(&bytes) as usize;
 
-            if size_rsa == 0 || size_aes == 0 {
+            if size == 0 {
                 close!();
             }
 
             let handle_clone_clone_ugh = handle_clone.clone();
-            let lines = io::read_exact(bufreader, vec![0; size_rsa+size_aes])
+            let lines = io::read_exact(reader, vec![0; size])
                 .map_err(|_| ())
-                .and_then(move |(bufreader, bytes)| {
-                    let packet = match common::decrypt(&bytes, &rsa_clone, size_rsa) {
+                .and_then(move |(reader, bytes)| {
+                    let packet = match common::deserialize(&bytes) {
                         Ok(ok) => ok,
                         Err(err) => {
-                            eprintln!("Failed to decrypt message from client: {}", err);
+                            eprintln!("Failed to deserialize message from client: {}", err);
                             close!();
                         }
                     };
 
-                    let mut reply = None;
-                    let mut public_key = None;
-
-                    macro_rules! rsa {
-                        ($public_key:expr) => {
-                            match Rsa::public_key_from_pem($public_key) {
-                                Ok(ok) => ok,
-                                Err(_) => { close!(); }
+                    macro_rules! get_id {
+                        () => {
+                            match sessions.borrow()[&ip].id {
+                                Some(some) => some,
+                                None => { close!(); }
                             }
                         }
                     }
+
+                    let mut reply = None;
 
                     match packet {
                         Packet::Login(login) => {
@@ -244,7 +199,7 @@ fn handle_client(
                                         });
                                         if valid {
                                             let token = attempt_or!(gen_token(), {
-                                                println!("Failed to generate random token");
+                                                eprintln!("Failed to generate random token");
                                                 close!();
                                             });
                                             db.execute(
@@ -255,10 +210,7 @@ fn handle_client(
                                                 id: Some(row_id),
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().insert(ip, Session {
-                                                id: row_id,
-                                                rsa: rsa!(&login.public_key)
-                                            });
+                                            sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(row_id);
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -268,10 +220,7 @@ fn handle_client(
                                                 id: Some(row_id),
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().insert(ip, Session {
-                                                id: row_id,
-                                                rsa: rsa!(&login.public_key)
-                                            });
+                                            sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(row_id);
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -283,11 +232,11 @@ fn handle_client(
                                 }
                             } else if let Some(password) = login.password {
                                 let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
-                                    println!("Failed to hash password");
+                                    eprintln!("Failed to hash password");
                                     close!();
                                 });
                                 let token = attempt_or!(gen_token(), {
-                                    println!("Failed to generate random token");
+                                    eprintln!("Failed to generate random token");
                                     close!();
                                 });
                                 db.execute(
@@ -298,17 +247,13 @@ fn handle_client(
                                     id: None,
                                     token: token
                                 }));
-                                sessions.borrow_mut().insert(ip, Session {
-                                    id: db.last_insert_rowid() as usize,
-                                    rsa: rsa!(&login.public_key)
-                                });
+                                sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(db.last_insert_rowid() as usize);
                             }
-
-                            public_key = Some(login.public_key);
                         },
                         Packet::MessageCreate(msg) => {
+                            let id = get_id!();
                             println!(
-                                "User #{} sent {}", sessions.borrow().get(&ip).unwrap().id, String::from_utf8_lossy(&msg.text)
+                                "User #{} sent {}", id, String::from_utf8_lossy(&msg.text)
                             );
                         },
                         Packet::Close => { close!(); }
@@ -319,50 +264,43 @@ fn handle_client(
                         Some(some) => some,
                         None => {
                             handle_client(
-                                rsa_clone,
                                 handle_clone_clone_ugh,
                                 db,
                                 sessions,
                                 ip,
-                                bufreader,
-                                bufwriter
+                                reader
                             );
                             return Ok(());
                         }
                     };
 
-                    let _rsa: Rsa;
-                    let encrypted = {
-                        let sessions = sessions.borrow();
-                        let rsa = match sessions.get(&ip) {
-                            Some(ref some) => &some.rsa,
-                            None => match public_key {
-                                Some(some) => {
-                                    _rsa = rsa!(&some);
-                                    &_rsa
-                                },
-                                None => { close!(); }
-                            }
-                        };
-                        attempt_or!(common::encrypt(&reply, &rsa), {
-                            println!("Failed to encrypt reply");
-                            close!();
-                        })
-                    };
+                    let mut encoded = attempt_or!(common::serialize(&reply), {
+                        eprintln!("Failed to encode reply");
+                        close!();
+                    });
+                    if encoded.len() > std::u16::MAX as usize {
+                        eprintln!("Oh noes! Size went over u16!");
+                        eprintln!("Contact the developer! This is a bug!");
+                        eprintln!("I repeat, this is a bug!");
+                        close!();
+                    }
+                    let mut buf = Vec::with_capacity(2 + encoded.len());
+                    let size = common::encode_u16(encoded.len() as u16);
+                    buf.extend(size.into_iter());
+                    buf.append(&mut encoded);
                     let handle_clone_clone_clone_uugghh = handle_clone_clone_ugh.clone();
-                    let write = io::write_all(bufwriter, encrypted)
+                    let writer = sessions.borrow_mut().get_mut(&ip).unwrap().writer.take().unwrap();
+                    let write = io::write_all(writer, buf)
                         .map_err(|_| ())
                         .and_then(move |(mut bufwriter, _)| {
                             use std::io::Write;
                             let _ = bufwriter.flush();
                             handle_client(
-                                rsa_clone,
                                 handle_clone_clone_clone_uugghh,
                                 db,
                                 sessions,
                                 ip,
-                                bufreader,
-                                bufwriter
+                                reader
                             );
                             Ok(())
                         });
