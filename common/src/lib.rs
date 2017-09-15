@@ -14,6 +14,8 @@ pub const RSA_KEY_BIT_LEN: u32 = 3072;
 
 pub const ERR_LOGIN_INVALID: u8 = 0;
 pub const ERR_LOGIN_BANNED:  u8 = 1;
+pub const ERR_LOGIN_EMPTY:   u8 = 2;
+pub const ERR_LOGIN_BOT:     u8 = 3;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
@@ -23,11 +25,11 @@ pub struct Attribute {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
-    pub id: usize,
+    pub attributes: Vec<usize>,
     pub bot: bool,
+    pub id: usize,
     pub name: String,
-    pub nick: Option<String>,
-    pub attributes: Vec<usize>
+    pub nick: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
@@ -84,11 +86,13 @@ pub struct Command {
     pub command: String,
     pub recipient: usize
 }
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Close {}
 
 // SERVER PACKETS
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LoginSuccess {
-    pub created: bool,
+    pub id: Option<usize>, // None if account was created
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -105,6 +109,7 @@ macro_rules! packet {
         #[serde(/*tag = "type",*/ rename_all = "snake_case")]
         pub enum Packet {
             Err(u8),
+            Close,
             $($type($type),)+
         }
     }

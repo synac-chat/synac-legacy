@@ -193,11 +193,25 @@ fn main() {
                         }
 
                         match common::read(&mut tcp, &rsa_decrypt) {
-                            Ok(Packet::LoginSuccess(_)) => success = true,
+                            Ok(Packet::LoginSuccess(login)) => {
+                                success = true;
+                                if let Some(id) = login.id {
+                                    println!(stdout, "Logged in as user #{}", id);
+                                } else {
+                                    println!(stdout, "Tried to log in with your token: Apparently account was created.");
+                                    println!(stdout, "I think you should stay away from this server. It's weird.");
+                                    continue;
+                                }
+                            },
                             Ok(Packet::Err(code)) => match code {
-                                common::ERR_LOGIN_INVALID => {},
+                                common::ERR_LOGIN_INVALID |
+                                common::ERR_LOGIN_EMPTY => {},
                                 common::ERR_LOGIN_BANNED => {
                                     println!(stdout, "Oh noes, you have been banned from this server :(");
+                                    continue;
+                                },
+                                common::ERR_LOGIN_BOT => {
+                                    println!(stdout, "This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
@@ -252,7 +266,9 @@ fn main() {
                                     "UPDATE servers SET token = ? WHERE ip = ?",
                                     &[&login.token, &addr.to_string()]
                                 ).unwrap();
-                                if login.created {
+                                if let Some(id) = login.id {
+                                    println!(stdout, "Logged in as user #{}", id);
+                                } else {
                                     println!(stdout, "Account created");
                                 }
                             },
@@ -260,6 +276,10 @@ fn main() {
                                 common::ERR_LOGIN_INVALID => {},
                                 common::ERR_LOGIN_BANNED => {
                                     println!(stdout, "Oh noes, you have been banned from this server :(");
+                                    continue;
+                                },
+                                common::ERR_LOGIN_BOT => {
+                                    println!(stdout, "This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
@@ -278,11 +298,13 @@ fn main() {
                             }
                         }
                     }
-                    stream = Some((rsa_encrypt, rsa_decrypt, tcp));
+                    stream = Some((tcp, rsa_encrypt, rsa_decrypt));
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
-                    if stream.is_none() {
+                    if let Some((ref mut stream, ref rsa_encrypt, _)) = stream {
+                        let _ = common::write(stream, &rsa_encrypt, &Packet::Close);
+                    } else {
                         println!(stdout, "You're not connected to a server");
                         continue;
                     }
@@ -311,7 +333,7 @@ fn main() {
                 println!(stdout, "You're not connected to a server");
                 continue;
             },
-            Some((ref mut rsa_encrypt, _, ref mut stream)) => {
+            Some((ref mut stream, ref mut rsa_encrypt, _)) => {
                 let packet = Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
                     text: input.into_bytes()
