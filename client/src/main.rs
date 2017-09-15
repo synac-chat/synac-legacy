@@ -170,7 +170,6 @@ fn main() {
                                             for byte in &digest {
                                                 digest_str.push_str(&format!("{:X}", byte));
                                             }
-                                            println!(io::stdout(), "{}", digest_str);
                                             use std::ascii::AsciiExt;
                                             public_key.trim().eq_ignore_ascii_case(&digest_str)
                                         },
@@ -380,14 +379,6 @@ fn parse_ip(input: &str) -> Option<SocketAddr> {
         return None;
     }
 
-    // let ip = if ip == "localhost" {
-    //     IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
-    // } else {
-    //     match ip.parse::<IpAddr>() {
-    //         Ok(ip) => ip,
-    //         Err(_) => return None
-    //     }
-    // };
     use std::net::ToSocketAddrs;
     match (ip, port).to_socket_addrs() {
         Ok(ok) => ok,
