@@ -85,7 +85,8 @@ pub struct Close {}
 // SERVER PACKETS
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LoginSuccess {
-    pub id: Option<usize>, // None if account was created
+    pub created: bool,
+    pub id: usize, // None if account was created
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug)]

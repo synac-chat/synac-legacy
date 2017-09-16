@@ -8,33 +8,27 @@ mod parser;
 
 use common::Packet;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream, SSL_VERIFY_PEER};
+use rusqlite::Connection as SqlConnection;
 use rustyline::error::ReadlineError;
 use std::env;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use termion::color;
+use termion::cursor;
 use termion::screen::AlternateScreen;
 
-macro_rules! print {
-    ($($arg:tt)+) => {
-        write!($($arg)+).unwrap();
-    }
-}
-macro_rules! println {
-    ($($arg:tt)+) => {
-        writeln!($($arg)+).unwrap();
-    }
-}
 macro_rules! flush {
-    ($stdout:expr) => {
-        $stdout.flush().unwrap();
+    () => {
+        io::stdout().flush().unwrap();
     }
 }
 
 fn main() {
-    let db = match rusqlite::Connection::open("data.sqlite") {
+    let db = match SqlConnection::open("data.sqlite") {
         Ok(ok) => ok,
         Err(err) => {
             eprintln!("Failed to open database");
@@ -60,43 +54,85 @@ fn main() {
     let ssl = SslConnectorBuilder::new(SslMethod::tls())
         .expect("Failed to create SSL connector D:")
         .build();
-    let stream: Arc<Mutex<Option<SslStream<TcpStream>>>> = Arc::new(Mutex::new(None));
+    let stream: Arc<Mutex<Option<(usize, SslStream<TcpStream>)>>> = Arc::new(Mutex::new(None));
     let stream_clone = stream.clone();
 
+    let _screen = AlternateScreen::from(io::stdout());
+
+    println!("{}Welcome, {}", cursor::Goto(1, 1), nick);
+    println!("To change your name, type");
+    println!("/nick <name>");
+    println!("To connect to a server, type");
+    println!("/connect <ip>");
+    println!();
+
+    let (sent_sender, sent_receiver) = mpsc::channel();
+
     thread::spawn(move || {
+        let mut size = true;
+        let mut buf = vec![0; 2];
+        let mut i = 0;
         loop {
-            if let Some(ref mut stream) = *stream_clone.lock().unwrap() {
-                let mut byte = vec![0];
-                let read = stream.read(&mut byte).unwrap_or_default();
-                if read > 0 {
-                    println!(io::stdout(), "{} bytes read: {:?}", read, byte);
+            if let Some((id, ref mut stream)) = *stream_clone.lock().unwrap() {
+                match stream.read(&mut buf[i..]) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        i += read;
+                        if i >= buf.len() {
+                            if size {
+                                size = false;
+                                let size = common::decode_u16(&buf) as usize;
+                                buf = vec![0; size];
+                                i = 0;
+                            } else {
+                                match common::deserialize(&buf) {
+                                    Ok(Packet::MessageReceive(msg)) => {
+                                        println!("\r{}: {}", msg.author.name, String::from_utf8_lossy(&msg.text));
+                                        print!("> ");
+                                        flush!();
+                                        if msg.author.id == id {
+                                            sent_sender.send(()).unwrap();
+                                        }
+                                    },
+                                    Ok(_) => {
+                                        unimplemented!();
+                                    },
+                                    Err(err) => {
+                                        println!("Failed to deserialize message!");
+                                        println!("{}", err);
+                                        println!();
+                                        continue;
+                                    }
+                                };
+                                size = true;
+                                buf = vec![0; 2];
+                                i = 0;
+                            }
+                        }
+                    },
+                    Err(_) => {}
                 }
             }
-            thread::sleep(Duration::from_secs(1));
+            // thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(250));
         }
     });
 
-    let mut stdin = io::stdin();
-    let mut stdout = AlternateScreen::from(io::stdout());
-    println!(stdout, "{}Welcome, {}", termion::cursor::Goto(1, 1), nick);
-    println!(stdout, "To change your name, type");
-    println!(stdout, "/nick <name>");
-    println!(stdout, "To connect to a server, type");
-    println!(stdout, "/connect <ip>");
-    println!(stdout);
-    flush!(stdout);
-
     let mut editor = rustyline::Editor::<()>::new();
     loop {
-        flush!(stdout);
         let input = match editor.readline("> ") {
             Ok(ok) => ok,
-            Err(ReadlineError::Eof) => break,
+            Err(ReadlineError::Eof) |
+            Err(ReadlineError::Interrupted) => break,
             Err(err) => {
                 eprintln!("Couldn't read line: {}", err);
                 break;
             }
         };
+        print!("{}", cursor::Up(1));
+        if input.is_empty() {
+            continue;
+        }
         editor.add_history_entry(&input);
 
         if input.starts_with('/') {
@@ -109,7 +145,7 @@ fn main() {
             macro_rules! usage {
                 ($amount:expr, $usage:expr) => {
                     if args.len() != $amount {
-                        println!(stdout, concat!("Usage: /", $usage));
+                        println!(concat!("Usage: /", $usage));
                         continue;
                     }
                 }
@@ -119,20 +155,20 @@ fn main() {
                 "nick" => {
                     usage!(1, "nick <name>");
                     nick = args.remove(0);
-                    println!(stdout, "Your name is now {}", nick);
+                    println!("Your name is now {}", nick);
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
                     let mut stream = stream.lock().unwrap();
                     if stream.is_some() {
-                        println!(stdout, "Please disconnect first.");
+                        println!("Please disconnect first.");
                         continue;
                     }
 
                     let addr = match parse_ip(&args[0]) {
                         Some(some) => some,
                         None => {
-                            println!(stdout, "Could not parse IP");
+                            println!("Could not parse IP");
                             continue;
                         }
                     };
@@ -147,10 +183,10 @@ fn main() {
                         public_key = row.get(0);
                         token = row.get(1);
                     } else {
-                        println!(stdout, "To securely connect, we need some data from the server (\"public key\").");
-                        println!(stdout, "The server owner should have given you this.");
-                        println!(stdout, "Once you have it, enter it here:");
-                        flush!(stdout);
+                        println!("To securely connect, we need some data from the server (\"public key\").");
+                        println!("The server owner should have given you this.");
+                        println!("Once you have it, enter it here:");
+                        flush!();
                         let result = editor.readline("");
                         public_key = match result {
                             Err(ReadlineError::Eof) |
@@ -167,12 +203,11 @@ fn main() {
                             &[&addr.to_string(), &public_key]
                         ).unwrap();
                     }
-                    // TODO use public_key
                     let stream_ = match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
-                            println!(stdout, "Could not connect!");
-                            println!(stdout, "{}", err);
+                            println!("Could not connect!");
+                            println!("{}", err);
                             continue;
                         }
                     };
@@ -204,13 +239,13 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         {
                             Ok(ok) => ok,
                             Err(_) => {
-                                println!(stdout, "Faild to validate certificate");
+                                println!("Faild to validate certificate");
                                 continue;
                             }
                         }
                     };
 
-                    let mut success = false;
+                    let mut id = None;
                     if let Some(token) = token {
                         let packet = Packet::Login(common::Login {
                             bot: false,
@@ -220,64 +255,63 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         });
 
                         if let Err(err) = common::write(&mut stream_, &packet) {
-                            println!(stdout, "Could not request login");
-                            println!(stdout, "{}", err);
+                            println!("Could not request login");
+                            println!("{}", err);
                             continue;
                         }
 
                         match common::read(&mut stream_) {
                             Ok(Packet::LoginSuccess(login)) => {
-                                success = true;
-                                if let Some(id) = login.id {
-                                    println!(stdout, "Logged in as user #{}", id);
-                                } else {
-                                    println!(stdout, "Tried to log in with your token: Apparently an account was created.");
-                                    println!(stdout, "I think you should stay away from this server. It's weird.");
+                                id = Some(login.id);
+                                if login.created {
+                                    println!("Tried to log in with your token: Apparently an account was created.");
+                                    println!("I think you should stay away from this server. It's weird.");
                                     continue;
                                 }
+                                println!("Logged in as user #{}", login.id);
                             },
                             Ok(Packet::Err(code)) => match code {
                                 common::ERR_LOGIN_INVALID |
                                 common::ERR_LOGIN_EMPTY => {},
                                 common::ERR_LOGIN_BANNED => {
-                                    println!(stdout, "Oh noes, you have been banned from this server :(");
+                                    println!("Oh noes, you have been banned from this server :(");
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!(stdout, "This account is a bot account.");
+                                    println!("This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
-                                    println!(stdout, "The server responded with an invalid error :/");
+                                    println!("The server responded with an invalid error :/");
                                     continue;
                                 }
                             },
                             Ok(_) => {
-                                println!(stdout, "The server responded with an invalid packet :/");
+                                println!("The server responded with an invalid packet :/");
                                 continue;
                             }
                             Err(err) => {
-                                println!(stdout, "Failed to read from server");
-                                println!(stdout, "{}", err);
+                                println!("Failed to read from server");
+                                println!("{}", err);
                                 continue;
                             }
                         }
                     }
 
-                    if !success {
-                        print!(stdout, "Password: ");
-                        flush!(stdout);
+                    if id.is_none() {
+                        print!("Password: ");
+                        flush!();
                         use termion::input::TermRead;
-                        let pass = match stdin.read_passwd(&mut stdout) {
+                        let pass = match io::stdin().read_passwd(&mut io::stdout()) {
                             Ok(Some(some)) => some,
                             Ok(None) => continue,
                             Err(err) => {
-                                println!(stdout, "Failed to read password");
-                                println!(stdout, "{}", err);
+                                println!("Failed to read password");
+                                println!("{}", err);
                                 continue;
                             }
                         };
-                        println!(stdout);
+                        println!();
 
                         let packet = Packet::Login(common::Login {
                             bot: false,
@@ -287,8 +321,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         });
 
                         if let Err(err) = common::write(&mut stream_, &packet) {
-                            println!(stdout, "Could not request login");
-                            println!(stdout, "{}", err);
+                            println!("Could not request login");
+                            println!("{}", err);
                             continue;
                         }
 
@@ -298,48 +332,48 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                     "UPDATE servers SET token = ? WHERE ip = ?",
                                     &[&login.token, &addr.to_string()]
                                 ).unwrap();
-                                if let Some(id) = login.id {
-                                    println!(stdout, "Logged in as user #{}", id);
-                                } else {
-                                    println!(stdout, "Account created");
+                                if login.created {
+                                    println!("Account created");
                                 }
+                                id = Some(login.id);
+                                println!("Logged in as user #{}", login.id);
                             },
                             Ok(Packet::Err(code)) => match code {
                                 common::ERR_LOGIN_INVALID => {},
                                 common::ERR_LOGIN_BANNED => {
-                                    println!(stdout, "Oh noes, you have been banned from this server :(");
+                                    println!("Oh noes, you have been banned from this server :(");
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!(stdout, "This account is a bot account.");
+                                    println!("This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
-                                    println!(stdout, "The server responded with an invalid error :/");
+                                    println!("The server responded with an invalid error :/");
                                     continue;
                                 }
                             },
                             Ok(_) => {
-                                println!(stdout, "The server responded with an invalid packet :/");
+                                println!("The server responded with an invalid packet :/");
                                 continue;
                             }
                             Err(err) => {
-                                println!(stdout, "Failed to read from server");
-                                println!(stdout, "{}", err);
+                                println!("Failed to read from server");
+                                println!("{}", err);
                                 continue;
                             }
                         }
                     }
                     stream_.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-                    *stream = Some(stream_);
+                    *stream = Some((id.unwrap(), stream_));
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
                     let mut stream = stream.lock().unwrap();
-                    if let Some(ref mut stream) = *stream {
+                    if let Some((_, ref mut stream)) = *stream {
                         let _ = common::write(stream, &Packet::Close);
                     } else {
-                        println!(stdout, "You're not connected to a server");
+                        println!("You're not connected to a server");
                         continue;
                     }
                     *stream = None;
@@ -349,40 +383,41 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     let addr = match parse_ip(&args[0]) {
                         Some(some) => some,
                         None => {
-                            println!(stdout, "Not a valid IP");
+                            println!("Not a valid IP");
                             continue;
                         }
                     };
                     db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 _ => {
-                    println!(stdout, "Unknown command");
+                    println!("Unknown command");
                 }
             }
             continue;
         }
 
-        if input.is_empty() {
-            continue;
-        }
-
         match *stream.lock().unwrap() {
             None => {
-                println!(stdout, "You're not connected to a server");
+                println!("You're not connected to a server");
                 continue;
             },
-            Some(ref mut stream) => {
+            Some((_, ref mut stream)) => {
+                print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
+                flush!();
                 let packet = Packet::MessageCreate(common::MessageCreate {
                     channel: 0,
                     text: input.into_bytes()
                 });
 
                 if let Err(err) = common::write(stream, &packet) {
-                    println!(stdout, "Failed to deliver message");
-                    println!(stdout, "{}", err);
+                    println!("\rFailed to deliver message");
+                    println!("{}", err);
+                    continue;
                 }
             }
         }
+        // Could only happen if message was sent
+        sent_receiver.recv().unwrap();
     }
 }
 

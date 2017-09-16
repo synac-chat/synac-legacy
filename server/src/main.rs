@@ -285,7 +285,8 @@ fn handle_client(
                                                 &[&token, &row_id.to_string()]
                                             ).unwrap();
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
-                                                id: Some(row_id),
+                                                created: false,
+                                                id: row_id,
                                                 token: token
                                             }));
                                             sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
@@ -295,7 +296,8 @@ fn handle_client(
                                     } else if let Some(token) = login.token {
                                         if token == row_token {
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
-                                                id: Some(row_id),
+                                                created: false,
+                                                id: row_id,
                                                 token: token
                                             }));
                                             sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
@@ -321,12 +323,13 @@ fn handle_client(
                                     "INSERT INTO users (bot, name, password, token) VALUES (?, ?, ?, ?)",
                                     &[&if login.bot { "1" } else { "0" }, &login.name, &password, &token]
                                 ).unwrap();
+                                let id = db.last_insert_rowid() as usize;
                                 reply = Some(Packet::LoginSuccess(common::LoginSuccess {
-                                    id: None,
+                                    created: true,
+                                    id: id,
                                     token: token
                                 }));
-                                sessions.borrow_mut().get_mut(&conn_id).unwrap().id =
-                                    Some(db.last_insert_rowid() as usize);
+                                sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(id);
                             }
                         },
                         Packet::MessageCreate(msg) => {
@@ -344,15 +347,22 @@ fn handle_client(
                             });
                             assert!(encoded.len() < std::u16::MAX as usize);
                             let size = common::encode_u16(encoded.len() as u16);
-                            for (i, s) in sessions.borrow_mut().iter_mut() {
-                                attempt_or!(s.writer.write_all(&size)
+                            sessions.borrow_mut().retain(|i, s| {
+                                match s.writer.write_all(&size)
                                     .and_then(|_| s.writer.write_all(&encoded))
-                                    .and_then(|_| s.writer.flush()), {
-
-                                    eprintln!("Failed to deliver message to User #{}", i);
-                                    close!();
-                                });
-                            }
+                                    .and_then(|_| s.writer.flush()) {
+                                    Ok(ok) => ok,
+                                    Err(err) => {
+                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                            return false;
+                                        } else {
+                                            eprintln!("Failed to deliver message to User #{}", i);
+                                            eprintln!("Error kind: {}", err);
+                                        }
+                                    }
+                                }
+                                true
+                            });
                         },
                         Packet::Close => { close!(); }
                         _ => unimplemented!(),
