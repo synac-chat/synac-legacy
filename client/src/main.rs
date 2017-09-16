@@ -10,6 +10,7 @@ use common::Packet;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream, SSL_VERIFY_PEER};
 use rusqlite::Connection as SqlConnection;
 use rustyline::error::ReadlineError;
+use std::collections::HashMap;
 use std::env;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -25,6 +26,13 @@ macro_rules! flush {
     () => {
         io::stdout().flush().unwrap();
     }
+}
+
+pub struct Session {
+    stream: SslStream<TcpStream>,
+    id: usize,
+    channel: Option<usize>,
+    channels: HashMap<usize, common::Channel>
 }
 
 fn main() {
@@ -54,8 +62,8 @@ fn main() {
     let ssl = SslConnectorBuilder::new(SslMethod::tls())
         .expect("Failed to create SSL connector D:")
         .build();
-    let stream: Arc<Mutex<Option<(usize, SslStream<TcpStream>)>>> = Arc::new(Mutex::new(None));
-    let stream_clone = stream.clone();
+    let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
+    let session_clone = session.clone();
 
     let _screen = AlternateScreen::from(io::stdout());
 
@@ -73,8 +81,8 @@ fn main() {
         let mut buf = vec![0; 2];
         let mut i = 0;
         loop {
-            if let Some((id, ref mut stream)) = *stream_clone.lock().unwrap() {
-                match stream.read(&mut buf[i..]) {
+            if let Some(ref mut session) = *session_clone.lock().unwrap() {
+                match session.stream.read(&mut buf[i..]) {
                     Ok(0) => break,
                     Ok(read) => {
                         i += read;
@@ -87,18 +95,22 @@ fn main() {
                             } else {
                                 match common::deserialize(&buf) {
                                     Ok(Packet::MessageReceive(msg)) => {
-                                        println!("{}{}: {}", cursor::Restore, msg.author.name,
-                                                 String::from_utf8_lossy(&msg.text));
-                                        if msg.author.id == id {
-                                            sent_sender.send(()).unwrap();
-                                        } else {
-                                            to_terminal_bottom();
+                                        if session.channel == Some(msg.channel.id) {
+                                            println!("{}{}: {}", cursor::Restore, msg.author.name,
+                                                     String::from_utf8_lossy(&msg.text));
+                                            if msg.author.id == session.id {
+                                                sent_sender.send(()).unwrap();
+                                            } else {
+                                                to_terminal_bottom();
+                                            }
+                                            flush!();
                                         }
-                                        flush!();
                                     },
+                                    Ok(Packet::ChannelReceive(event)) => {
+                                        session.channels.insert(event.inner.id, event.inner);
+                                    }
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
-                                        println!("{}No such channel. List channels with /list, change with /join",
-                                                 cursor::Restore);
+                                        println!("{}It appears this channel was deleted.", cursor::Restore);
                                         sent_sender.send(()).unwrap();
                                         flush!();
                                     },
@@ -167,8 +179,8 @@ fn main() {
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
-                    let mut stream = stream.lock().unwrap();
-                    if stream.is_some() {
+                    let mut session = session.lock().unwrap();
+                    if session.is_some() {
                         println!("Please disconnect first.");
                         continue;
                     }
@@ -376,18 +388,23 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         }
                     }
                     stream_.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-                    *stream = Some((id.unwrap(), stream_));
+                    *session = Some(Session {
+                        stream: stream_,
+                        id: id.unwrap(),
+                        channel: None,
+                        channels: HashMap::new()
+                    });
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
-                    let mut stream = stream.lock().unwrap();
-                    if let Some((_, ref mut stream)) = *stream {
-                        let _ = common::write(stream, &Packet::Close);
+                    let mut session = session.lock().unwrap();
+                    if let Some(ref mut session) = *session {
+                        let _ = common::write(&mut session.stream, &Packet::Close);
                     } else {
                         eprintln!("You're not connected to a server");
                         continue;
                     }
-                    *stream = None;
+                    *session = None;
                 },
                 "forget" => {
                     usage!(1, "forget <ip>");
@@ -400,29 +417,81 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     };
                     db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
+                "create" => {
+                    usage!(2, "create <\"channel\"> <name>");
+                    match *session.lock().unwrap() {
+                        None => {
+                            eprintln!("You're not connected to a server");
+                            continue;
+                        },
+                        Some(ref mut session) => {
+                            if args[0] == "channel" {
+                                let packet = Packet::ChannelCreate(common::ChannelCreate {
+                                    allow: Vec::new(),
+                                    deny: Vec::new(),
+                                    name: args.remove(1)
+                                });
+
+                                if let Err(err) = common::write(&mut session.stream, &packet) {
+                                    eprintln!("Failed to send packet");
+                                    eprintln!("{}", err);
+                                }
+                            } else {
+                                eprintln!("Can't create that!");
+                            }
+                        }
+                    }
+                },
+                "join" => {
+                    usage!(1, "join <channel name>");
+                    match *session.lock().unwrap() {
+                        None => {
+                            eprintln!("You're not connected to a server");
+                            continue;
+                        },
+                        Some(ref mut session) => {
+                            let mut name = &*args[0];
+                            if name.starts_with('#') {
+                                name = &name[1..];
+                            }
+
+                            for channel in session.channels.values() {
+                                if channel.name == name {
+                                    session.channel = Some(channel.id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                },
                 _ => {
-                    println!("Unknown command");
+                    eprintln!("Unknown command");
                 }
             }
             continue;
         }
 
-        match *stream.lock().unwrap() {
+        match *session.lock().unwrap() {
             None => {
-                println!("You're not connected to a server");
+                eprintln!("You're not connected to a server");
                 continue;
             },
-            Some((_, ref mut stream)) => {
-                print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
-                flush!();
-                let packet = Packet::MessageCreate(common::MessageCreate {
-                    channel: 0,
-                    text: input.into_bytes()
-                });
+            Some(ref mut session) => {
+                if let Some(channel) = session.channel {
+                    print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
+                    flush!();
+                    let packet = Packet::MessageCreate(common::MessageCreate {
+                        channel: channel,
+                        text: input.into_bytes()
+                    });
 
-                if let Err(err) = common::write(stream, &packet) {
-                    println!("\rFailed to deliver message");
-                    println!("{}", err);
+                    if let Err(err) = common::write(&mut session.stream, &packet) {
+                        println!("\rFailed to deliver message");
+                        println!("{}", err);
+                        continue;
+                    }
+                } else {
+                    println!("No channel specified. See /create channel, /join and /list");
                     continue;
                 }
             }

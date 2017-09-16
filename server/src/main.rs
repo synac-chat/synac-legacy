@@ -202,6 +202,19 @@ fn get_list(input: &str) -> Vec<usize> {
         .map(|s| s.parse().expect("The database is broken. Congratz. You made me crash."))
         .collect()
 }
+fn to_list(input: &[usize]) -> String {
+    let mut result = String::new();
+    let mut first = true;
+    for i in input {
+        if first {
+            first = false;
+        } else {
+            result.push(',');
+        }
+        result.push_str(&i.to_string());
+    }
+    result
+}
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     let mut stmt = db.prepare("SELECT attributes, bot, id, name, nick FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
@@ -311,9 +324,11 @@ fn handle_client(
                         }
                     }
 
+                    let mut broadcast = false;
                     let mut reply = None;
 
                     match packet {
+                        Packet::Close => { close!(); }
                         Packet::Login(login) => {
                             let mut stmt = db.prepare("SELECT id, bot, token, password FROM users WHERE name = ?").unwrap();
                             let mut rows = stmt.query(&[&login.name]).unwrap();
@@ -338,7 +353,7 @@ fn handle_client(
                                             });
                                             db.execute(
                                                 "UPDATE users SET token = ? WHERE id = ?",
-                                                &[&token, &row_id.to_string()]
+                                                &[&token, &(row_id as i64)]
                                             ).unwrap();
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
                                                 created: false,
@@ -399,41 +414,35 @@ fn handle_client(
                                     "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
                                     &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
                                 ).unwrap();
-                                let packet = Packet::MessageReceive(common::MessageReceive {
+                                reply = Some(Packet::MessageReceive(common::MessageReceive {
                                     author: user,
                                     channel: channel,
-                                    id: 0,
+                                    id: db.last_insert_rowid() as usize,
                                     text: msg.text,
                                     timestamp: timestamp,
                                     timestamp_edit: None
-                                });
-                                let encoded = attempt_or!(common::serialize(&packet), {
-                                    eprintln!("Failed to serialize message");
-                                    close!();
-                                });
-                                assert!(encoded.len() < std::u16::MAX as usize);
-                                let size = common::encode_u16(encoded.len() as u16);
-                                sessions.borrow_mut().retain(|i, s| {
-                                    match s.writer.write_all(&size)
-                                        .and_then(|_| s.writer.write_all(&encoded))
-                                        .and_then(|_| s.writer.flush()) {
-                                        Ok(ok) => ok,
-                                        Err(err) => {
-                                            if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                                return false;
-                                            } else {
-                                                eprintln!("Failed to deliver message to User #{}", i);
-                                                eprintln!("Error kind: {}", err);
-                                            }
-                                        }
-                                    }
-                                    true
-                                });
+                                }));
+                                broadcast = true;
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
                             }
                         },
-                        Packet::Close => { close!(); }
+                        Packet::ChannelCreate(channel) => {
+                            db.execute(
+                                "INSERT INTO channels (allow, deny, name) VALUES (?, ?, ?)",
+                                &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
+                            ).unwrap();
+
+                            reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                inner: common::Channel {
+                                    allow: channel.allow,
+                                    deny:  channel.deny,
+                                    id: db.last_insert_rowid() as usize,
+                                    name: channel.name
+                                }
+                            }));
+                            broadcast = true;
+                        },
                         _ => unimplemented!(),
                     }
 
@@ -456,7 +465,30 @@ fn handle_client(
                     // Sure, I could solve that with an Option (which I used to do).
                     // However, if two things would try to write at once we'd have issues...
 
-                    {
+                    if broadcast {
+                        let encoded = attempt_or!(common::serialize(&reply), {
+                            eprintln!("Failed to serialize message");
+                            close!();
+                        });
+                        assert!(encoded.len() < std::u16::MAX as usize);
+                        let size = common::encode_u16(encoded.len() as u16);
+                        sessions.borrow_mut().retain(|i, s| {
+                            match s.writer.write_all(&size)
+                                .and_then(|_| s.writer.write_all(&encoded))
+                                .and_then(|_| s.writer.flush()) {
+                                Ok(ok) => ok,
+                                Err(err) => {
+                                    if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                        return false;
+                                    } else {
+                                        eprintln!("Failed to deliver message to User #{}", i);
+                                        eprintln!("Error kind: {}", err);
+                                    }
+                                }
+                            }
+                            true
+                        });
+                    } else {
                         let mut sessions = sessions.borrow_mut();
                         let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
 

@@ -103,6 +103,10 @@ pub struct LoginSuccess {
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelReceive {
+    pub inner: Channel
+}
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MessageReceive {
     pub author: User,
     pub channel: Channel,
@@ -143,6 +147,7 @@ packet! {
     Command,
 
     LoginSuccess,
+    ChannelReceive,
     MessageReceive,
     CommandReceive
 }
