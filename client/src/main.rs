@@ -87,20 +87,21 @@ fn main() {
                             } else {
                                 match common::deserialize(&buf) {
                                     Ok(Packet::MessageReceive(msg)) => {
-                                        println!("\r{}: {}", msg.author.name, String::from_utf8_lossy(&msg.text));
-                                        print!("> ");
+                                        println!("{}\r{}: {}", cursor::Restore, msg.author.name,
+                                                 String::from_utf8_lossy(&msg.text));
                                         flush!();
                                         if msg.author.id == id {
                                             sent_sender.send(()).unwrap();
+                                        } else {
+                                            to_terminal_bottom();
                                         }
                                     },
                                     Ok(_) => {
                                         unimplemented!();
                                     },
                                     Err(err) => {
-                                        println!("Failed to deserialize message!");
-                                        println!("{}", err);
-                                        println!();
+                                        eprintln!("Failed to deserialize message!");
+                                        eprintln!("{}", err);
                                         continue;
                                     }
                                 };
@@ -120,6 +121,7 @@ fn main() {
 
     let mut editor = rustyline::Editor::<()>::new();
     loop {
+        to_terminal_bottom();
         let input = match editor.readline("> ") {
             Ok(ok) => ok,
             Err(ReadlineError::Eof) |
@@ -129,7 +131,7 @@ fn main() {
                 break;
             }
         };
-        print!("{}", cursor::Up(1));
+        print!("{}", cursor::Restore);
         if input.is_empty() {
             continue;
         }
@@ -264,8 +266,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             Ok(Packet::LoginSuccess(login)) => {
                                 id = Some(login.id);
                                 if login.created {
-                                    println!("Tried to log in with your token: Apparently an account was created.");
-                                    println!("I think you should stay away from this server. It's weird.");
+                                    eprintln!("Tried to log in with your token: Apparently an account was created.");
+                                    eprintln!("I think you should stay away from this server. It's weird.");
                                     continue;
                                 }
                                 println!("Logged in as user #{}", login.id);
@@ -274,25 +276,25 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 common::ERR_LOGIN_INVALID |
                                 common::ERR_LOGIN_EMPTY => {},
                                 common::ERR_LOGIN_BANNED => {
-                                    println!("Oh noes, you have been banned from this server :(");
+                                    eprintln!("Oh noes, you have been banned from this server :(");
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account.");
+                                    eprintln!("This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
-                                    println!("The server responded with an invalid error :/");
+                                    eprintln!("The server responded with an invalid error :/");
                                     continue;
                                 }
                             },
                             Ok(_) => {
-                                println!("The server responded with an invalid packet :/");
+                                eprintln!("The server responded with an invalid packet :/");
                                 continue;
                             }
                             Err(err) => {
-                                println!("Failed to read from server");
-                                println!("{}", err);
+                                eprintln!("Failed to read from server");
+                                eprintln!("{}", err);
                                 continue;
                             }
                         }
@@ -306,7 +308,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             Ok(Some(some)) => some,
                             Ok(None) => continue,
                             Err(err) => {
-                                println!("Failed to read password");
+                                eprintln!("Failed to read password");
                                 println!("{}", err);
                                 continue;
                             }
@@ -341,25 +343,25 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             Ok(Packet::Err(code)) => match code {
                                 common::ERR_LOGIN_INVALID => {},
                                 common::ERR_LOGIN_BANNED => {
-                                    println!("Oh noes, you have been banned from this server :(");
+                                    eprintln!("Oh noes, you have been banned from this server :(");
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account.");
+                                    eprintln!("This account is a bot account.");
                                     continue;
                                 },
                                 _ => {
-                                    println!("The server responded with an invalid error :/");
+                                    eprintln!("The server responded with an invalid error :/");
                                     continue;
                                 }
                             },
                             Ok(_) => {
-                                println!("The server responded with an invalid packet :/");
+                                eprintln!("The server responded with an invalid packet :/");
                                 continue;
                             }
                             Err(err) => {
-                                println!("Failed to read from server");
-                                println!("{}", err);
+                                eprintln!("Failed to read from server");
+                                eprintln!("{}", err);
                                 continue;
                             }
                         }
@@ -373,7 +375,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     if let Some((_, ref mut stream)) = *stream {
                         let _ = common::write(stream, &Packet::Close);
                     } else {
-                        println!("You're not connected to a server");
+                        eprintln!("You're not connected to a server");
                         continue;
                     }
                     *stream = None;
@@ -383,7 +385,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     let addr = match parse_ip(&args[0]) {
                         Some(some) => some,
                         None => {
-                            println!("Not a valid IP");
+                            eprintln!("Not a valid IP");
                             continue;
                         }
                     };
@@ -418,6 +420,15 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         }
         // Could only happen if message was sent
         sent_receiver.recv().unwrap();
+    }
+}
+
+fn to_terminal_bottom() {
+    match termion::terminal_size() {
+        Ok((_, height)) => {
+            print!("{}{}", cursor::Save, cursor::Goto(0, height-1));
+        },
+        Err(_) => {}
     }
 }
 
