@@ -89,12 +89,12 @@ fn main() {
                                     Ok(Packet::MessageReceive(msg)) => {
                                         println!("{}\r{}: {}", cursor::Restore, msg.author.name,
                                                  String::from_utf8_lossy(&msg.text));
-                                        flush!();
                                         if msg.author.id == id {
                                             sent_sender.send(()).unwrap();
                                         } else {
                                             to_terminal_bottom();
                                         }
+                                        flush!();
                                     },
                                     Ok(_) => {
                                         unimplemented!();
