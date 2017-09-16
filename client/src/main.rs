@@ -7,11 +7,14 @@ extern crate common;
 mod parser;
 
 use common::Packet;
-use openssl::ssl::{SslMethod, SslConnectorBuilder, SSL_VERIFY_PEER};
+use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream, SSL_VERIFY_PEER};
 use rustyline::error::ReadlineError;
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use termion::screen::AlternateScreen;
 
 macro_rules! print {
@@ -57,7 +60,21 @@ fn main() {
     let ssl = SslConnectorBuilder::new(SslMethod::tls())
         .expect("Failed to create SSL connector D:")
         .build();
-    let mut stream = None;
+    let stream: Arc<Mutex<Option<SslStream<TcpStream>>>> = Arc::new(Mutex::new(None));
+    let stream_clone = stream.clone();
+
+    thread::spawn(move || {
+        loop {
+            if let Some(ref mut stream) = *stream_clone.lock().unwrap() {
+                let mut byte = vec![0];
+                let read = stream.read(&mut byte).unwrap_or_default();
+                if read > 0 {
+                    println!(io::stdout(), "{} bytes read: {:?}", read, byte);
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
 
     let mut stdin = io::stdin();
     let mut stdout = AlternateScreen::from(io::stdout());
@@ -106,6 +123,7 @@ fn main() {
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
+                    let mut stream = stream.lock().unwrap();
                     if stream.is_some() {
                         println!(stdout, "Please disconnect first.");
                         continue;
@@ -312,17 +330,19 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             }
                         }
                     }
-                    stream = Some(stream_);
+                    stream_.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
+                    *stream = Some(stream_);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
-                    if let Some(ref mut stream) = stream {
+                    let mut stream = stream.lock().unwrap();
+                    if let Some(ref mut stream) = *stream {
                         let _ = common::write(stream, &Packet::Close);
                     } else {
                         println!(stdout, "You're not connected to a server");
                         continue;
                     }
-                    stream = None;
+                    *stream = None;
                 },
                 "forget" => {
                     usage!(1, "forget <ip>");
@@ -342,7 +362,11 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             continue;
         }
 
-        match stream {
+        if input.is_empty() {
+            continue;
+        }
+
+        match *stream.lock().unwrap() {
             None => {
                 println!(stdout, "You're not connected to a server");
                 continue;

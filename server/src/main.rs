@@ -9,20 +9,21 @@ extern crate tokio_openssl;
 
 use common::Packet;
 use futures::{Future, Stream};
-use openssl::rand;
 use openssl::pkcs12::Pkcs12;
+use openssl::rand;
 use openssl::ssl::{SslMethod, SslAcceptorBuilder};
-use tokio_openssl::{SslAcceptorExt, SslStream};
+use rusqlite::Connection as SqlConnection;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::io::{Read, BufReader, BufWriter};
+use std::io::{Read, Write, BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::rc::Rc;
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::{Core, Handle};
 use tokio_io::io;
+use tokio_openssl::{SslAcceptorExt, SslStream};
 
 macro_rules! attempt_or {
     ($result:expr, $fail:block) => {
@@ -36,18 +37,13 @@ macro_rules! attempt_or {
 }
 
 fn main() {
-    let db = attempt_or!(rusqlite::Connection::open("data.sqlite"), {
+    let db = attempt_or!(SqlConnection::open("data.sqlite"), {
         eprintln!("SQLite initialization failed.");
         eprintln!("Is the file corrupt?");
         eprintln!("Is the file permissions badly configured?");
         eprintln!("Just guessing here ¯\\_(ツ)_/¯");
         return;
     });
-    db.execute("CREATE TABLE IF NOT EXISTS data (
-                    type    INTEGER NOT NULL,
-                    value   BLOB NOT NULL
-                )", &[])
-        .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS users (
                     attributes  TEXT NOT NULL DEFAULT '',
                     bot         INTEGER NOT NULL,
@@ -61,18 +57,6 @@ fn main() {
 
     let mut args = env::args();
     args.next();
-    match args.next().as_ref().map(|s| &**s) {
-        Some("start") => {},
-        Some("reset-keys") => {
-            db.execute("DELETE FROM data WHERE type=0", &[]).unwrap();
-            println!("Public & Private keys reset.");
-            return;
-        },
-        _ => {
-            println!("Usage: ./unnamed start [port] OR ./unnamed reset-keys");
-            return;
-        }
-    };
     let port = args.next().map(|val| match val.parse() {
         Ok(ok) => ok,
         Err(_) => {
@@ -145,28 +129,34 @@ fn main() {
     println!("I'm alive!");
 
     let sessions = Rc::new(RefCell::new(HashMap::new()));
+    let conn_id = Rc::new(RefCell::new(0usize));
 
-    let server = listener.incoming().for_each(|(conn, ip)| {
+    let server = listener.incoming().for_each(|(conn, _)| {
         use tokio_io::AsyncRead;
 
         let handle_clone = handle.clone();
         let db_clone = db.clone();
         let sessions_clone = sessions.clone();
+        let conn_id_clone = conn_id.clone();
+
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
             let (reader, writer) = conn.split();
             let reader = BufReader::new(reader);
             let writer = BufWriter::new(writer);
 
-            sessions_clone.borrow_mut().insert(ip.ip(), Session {
+            let my_conn_id = *conn_id_clone.borrow();
+            *conn_id_clone.borrow_mut() += 1;
+
+            sessions_clone.borrow_mut().insert(my_conn_id, Session {
                 id: None,
-                writer: Some(writer)
+                writer: writer
             });
 
             handle_client(
                 handle_clone,
                 db_clone,
                 sessions_clone,
-                ip.ip(),
+                my_conn_id,
                 reader
             );
 
@@ -188,25 +178,48 @@ fn gen_token() -> Result<String, openssl::error::ErrorStack> {
 
     Ok(unsafe { String::from_utf8_unchecked(token) })
 }
+fn get_list(input: &str) -> Vec<usize> {
+    input.split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().expect("The database is broken. Congratz. You made me crash."))
+        .collect()
+}
+fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
+    let mut stmt = db.prepare("SELECT attributes, bot, id, name, nick FROM users WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+
+        Some(common::User {
+            attributes: get_list(&row.get::<_, String>(0)),
+            bot: row.get(1),
+            id: row.get::<_, i64>(2) as usize,
+            name: row.get(3),
+            nick: row.get(4)
+        })
+    } else {
+        None
+    }
+}
 
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 struct Session {
     id: Option<usize>,
-    writer: Option<BufWriter<tokio_io::io::WriteHalf<SslStream<TcpStream>>>>
+    writer: BufWriter<tokio_io::io::WriteHalf<SslStream<TcpStream>>>
 }
 
 fn handle_client(
         handle: Rc<Handle>,
-        db: Rc<rusqlite::Connection>,
-        sessions: Rc<RefCell<HashMap<IpAddr, Session>>>,
-        ip: IpAddr,
-        reader: BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>
+        db: Rc<SqlConnection>,
+        sessions: Rc<RefCell<HashMap<usize, Session>>>,
+        conn_id: usize,
+        reader: BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
     ) {
     macro_rules! close {
         () => {
             println!("Closing connection");
-            sessions.borrow_mut().remove(&ip);
+            sessions.borrow_mut().remove(&conn_id);
             return Ok(());
         }
     }
@@ -235,7 +248,7 @@ fn handle_client(
 
                     macro_rules! get_id {
                         () => {
-                            match sessions.borrow()[&ip].id {
+                            match sessions.borrow()[&conn_id].id {
                                 Some(some) => some,
                                 None => { close!(); }
                             }
@@ -275,7 +288,7 @@ fn handle_client(
                                                 id: Some(row_id),
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(row_id);
+                                            sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -285,7 +298,7 @@ fn handle_client(
                                                 id: Some(row_id),
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(row_id);
+                                            sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -312,14 +325,34 @@ fn handle_client(
                                     id: None,
                                     token: token
                                 }));
-                                sessions.borrow_mut().get_mut(&ip).unwrap().id = Some(db.last_insert_rowid() as usize);
+                                sessions.borrow_mut().get_mut(&conn_id).unwrap().id =
+                                    Some(db.last_insert_rowid() as usize);
                             }
                         },
                         Packet::MessageCreate(msg) => {
                             let id = get_id!();
-                            println!(
-                                "User #{} sent {}", id, String::from_utf8_lossy(&msg.text)
-                            );
+                            let user = get_user(&db, id).unwrap();
+                            let packet = Packet::MessageReceive(common::MessageReceive {
+                                author: user,
+                                channel: msg.channel,
+                                id: 0,
+                                text: msg.text
+                            });
+                            let encoded = attempt_or!(common::serialize(&packet), {
+                                eprintln!("Failed to serialize message");
+                                close!();
+                            });
+                            assert!(encoded.len() < std::u16::MAX as usize);
+                            let size = common::encode_u16(encoded.len() as u16);
+                            for (i, s) in sessions.borrow_mut().iter_mut() {
+                                attempt_or!(s.writer.write_all(&size)
+                                    .and_then(|_| s.writer.write_all(&encoded))
+                                    .and_then(|_| s.writer.flush()), {
+
+                                    eprintln!("Failed to deliver message to User #{}", i);
+                                    close!();
+                                });
+                            }
                         },
                         Packet::Close => { close!(); }
                         _ => unimplemented!(),
@@ -332,45 +365,36 @@ fn handle_client(
                                 handle_clone_clone_ugh,
                                 db,
                                 sessions,
-                                ip,
+                                conn_id,
                                 reader
                             );
                             return Ok(());
                         }
                     };
 
-                    let mut encoded = attempt_or!(common::serialize(&reply), {
-                        eprintln!("Failed to encode reply");
-                        close!();
-                    });
-                    if encoded.len() > std::u16::MAX as usize {
-                        eprintln!("Oh noes! Size went over u16!");
-                        eprintln!("Contact the developer! This is a bug!");
-                        eprintln!("I repeat, this is a bug!");
-                        close!();
-                    }
-                    let mut buf = Vec::with_capacity(2 + encoded.len());
-                    let size = common::encode_u16(encoded.len() as u16);
-                    buf.extend(size.into_iter());
-                    buf.append(&mut encoded);
-                    let handle_clone_clone_clone_uugghh = handle_clone_clone_ugh.clone();
-                    let writer = sessions.borrow_mut().get_mut(&ip).unwrap().writer.take().unwrap();
-                    let write = io::write_all(writer, buf)
-                        .map_err(|_| ())
-                        .and_then(move |(mut bufwriter, _)| {
-                            use std::io::Write;
-                            let _ = bufwriter.flush();
-                            handle_client(
-                                handle_clone_clone_clone_uugghh,
-                                db,
-                                sessions,
-                                ip,
-                                reader
-                            );
-                            Ok(())
-                        });
+                    // Yes, I should be using io::write_all here - I very much agree.
+                    // However, io::write_all takes a writer, not a reference to one (understandable).
+                    // Sure, I could solve that with an Option (which I used to do).
+                    // However, if two things would try to write at once we'd have issues...
 
-                    handle_clone_clone_ugh.spawn(write);
+                    {
+                        let mut sessions = sessions.borrow_mut();
+                        let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
+
+                        attempt_or!(common::write(writer, &reply), {
+                            eprintln!("Failed to send reply");
+                            close!();
+                        });
+                    }
+
+                    handle_client(
+                        handle_clone_clone_ugh,
+                        db,
+                        sessions,
+                        conn_id,
+                        reader
+                    );
+
                     Ok(())
                 });
 

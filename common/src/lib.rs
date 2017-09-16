@@ -75,9 +75,8 @@ pub struct MessageDelete {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Command {
-    pub args: Vec<String>,
     pub author: usize,
-    pub command: String,
+    pub parts: Vec<String>,
     pub recipient: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -88,6 +87,13 @@ pub struct Close {}
 pub struct LoginSuccess {
     pub id: Option<usize>, // None if account was created
     pub token: String
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageReceive {
+    pub author: User,
+    pub channel: usize,
+    pub id: usize,
+    pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandReceive {
@@ -121,6 +127,7 @@ packet! {
     Command,
 
     LoginSuccess,
+    MessageReceive,
     CommandReceive
 }
 
