@@ -31,6 +31,14 @@ pub struct Channel {
     pub condition: Option<usize>,
     pub id: usize
 }
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Message {
+    pub channel: usize,
+    pub id: usize,
+    pub text: Vec<u8>,
+    pub timestamp: u64,
+    pub timestamp_edit: u64
+}
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug)]
@@ -71,6 +79,7 @@ pub struct MessageUpdate {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {
+    pub channel: usize,
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug)]

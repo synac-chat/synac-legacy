@@ -330,6 +330,8 @@ fn handle_client(
                                     token: token
                                 }));
                                 sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(id);
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
                             }
                         },
                         Packet::MessageCreate(msg) => {

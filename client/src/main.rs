@@ -341,7 +341,10 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 println!("Logged in as user #{}", login.id);
                             },
                             Ok(Packet::Err(code)) => match code {
-                                common::ERR_LOGIN_INVALID => {},
+                                common::ERR_LOGIN_INVALID => {
+                                    eprintln!("Invalid credentials");
+                                    continue;
+                                },
                                 common::ERR_LOGIN_BANNED => {
                                     eprintln!("Oh noes, you have been banned from this server :(");
                                     continue;
