@@ -87,13 +87,19 @@ fn main() {
                             } else {
                                 match common::deserialize(&buf) {
                                     Ok(Packet::MessageReceive(msg)) => {
-                                        println!("{}\r{}: {}", cursor::Restore, msg.author.name,
+                                        println!("{}{}: {}", cursor::Restore, msg.author.name,
                                                  String::from_utf8_lossy(&msg.text));
                                         if msg.author.id == id {
                                             sent_sender.send(()).unwrap();
                                         } else {
                                             to_terminal_bottom();
                                         }
+                                        flush!();
+                                    },
+                                    Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
+                                        println!("{}No such channel. List channels with /list, change with /join",
+                                                 cursor::Restore);
+                                        sent_sender.send(()).unwrap();
                                         flush!();
                                     },
                                     Ok(_) => {

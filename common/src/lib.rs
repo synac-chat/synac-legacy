@@ -11,6 +11,7 @@ pub const ERR_LOGIN_INVALID: u8 = 0;
 pub const ERR_LOGIN_BANNED:  u8 = 1;
 pub const ERR_LOGIN_EMPTY:   u8 = 2;
 pub const ERR_LOGIN_BOT:     u8 = 3;
+pub const ERR_UNKNOWN_CHANNEL: u8 = 4;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
@@ -28,16 +29,19 @@ pub struct User {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Channel {
-    pub condition: Option<usize>,
-    pub id: usize
+    pub allow: Vec<usize>,
+    pub deny:  Vec<usize>,
+    pub id: usize,
+    pub name: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Message {
+    pub author: usize,
     pub channel: usize,
     pub id: usize,
     pub text: Vec<u8>,
-    pub timestamp: u64,
-    pub timestamp_edit: u64
+    pub timestamp: i64,
+    pub timestamp_edit: Option<i64>
 }
 
 // CLIENT PACKETS
@@ -52,11 +56,13 @@ pub struct Login {
 pub struct ChannelList {}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelCreate {
-    pub channel: Channel
+    pub allow: Vec<usize>,
+    pub deny:  Vec<usize>,
+    pub name: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelUpdate {
-    pub channel: Channel
+    pub inner: Channel
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelDelete {
@@ -73,13 +79,11 @@ pub struct MessageCreate {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageUpdate {
-    pub channel: usize,
     pub id: usize,
     pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDelete {
-    pub channel: usize,
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -95,15 +99,17 @@ pub struct Close {}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LoginSuccess {
     pub created: bool,
-    pub id: usize, // None if account was created
+    pub id: usize,
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageReceive {
     pub author: User,
-    pub channel: usize,
+    pub channel: Channel,
     pub id: usize,
-    pub text: Vec<u8>
+    pub text: Vec<u8>,
+    pub timestamp: i64,
+    pub timestamp_edit: Option<i64>
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommandReceive {

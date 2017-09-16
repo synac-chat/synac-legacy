@@ -1,4 +1,5 @@
 extern crate bcrypt;
+extern crate chrono;
 extern crate common;
 extern crate futures;
 extern crate openssl;
@@ -20,6 +21,7 @@ use std::fs::File;
 use std::io::{Read, Write, BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::rc::Rc;
+use chrono::Utc;
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::{Core, Handle};
 use tokio_io::io;
@@ -52,6 +54,22 @@ fn main() {
                     nick        TEXT,
                     password    TEXT NOT NULL,
                     token       TEXT NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS channels (
+                    allow   TEXT NOT NULL DEFAULT '',
+                    deny    TEXT NOT NULL DEFAULT '',
+                    id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    name    TEXT NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS messages (
+                    author      INTEGER NOT NULL,
+                    channel     INTEGER NOT NULL,
+                    id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    text        BLOB NOT NULL,
+                    timestamp   INTEGER NOT NULL,
+                    timestamp_edit  INTEGER
                 )", &[])
         .expect("SQLite table creation failed");
 
@@ -201,6 +219,44 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
         None
     }
 }
+fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
+    let mut stmt = db.prepare("SELECT allow, deny, id, name FROM channels WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+
+        Some(common::Channel {
+            allow: get_list(&row.get::<_, String>(0)),
+            deny:  get_list(&row.get::<_, String>(1)),
+            id: row.get::<_, i64>(2) as usize,
+            name: row.get(3)
+        })
+    } else {
+        None
+    }
+}
+// TODO These will probably be useful some time
+// fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
+//     let mut stmt = db.prepare("SELECT author, channel, id, text, timestamp, timestamp_edit FROM messages WHERE id = ?")
+//         .unwrap();
+//     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+//     if let Some(row) = rows.next() {
+//         let row = row.unwrap();
+//         get_message_by_fields(row)
+//     } else {
+//         None
+//     }
+// }
+// fn get_message_by_fields(row: rusqlite::Row) -> Option<common::Message> {
+//     Some(common::Message {
+//         author: row.get::<_, i64>(0) as usize,
+//         channel: row.get::<_, i64>(1) as usize,
+//         id: row.get::<_, i64>(2) as usize,
+//         text: row.get(3),
+//         timestamp: row.get(4),
+//         timestamp_edit: row.get(5)
+//     })
+// }
 
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -321,7 +377,7 @@ fn handle_client(
                                 });
                                 db.execute(
                                     "INSERT INTO users (bot, name, password, token) VALUES (?, ?, ?, ?)",
-                                    &[&if login.bot { "1" } else { "0" }, &login.name, &password, &token]
+                                    &[&login.bot, &login.name, &password, &token]
                                 ).unwrap();
                                 let id = db.last_insert_rowid() as usize;
                                 reply = Some(Packet::LoginSuccess(common::LoginSuccess {
@@ -335,36 +391,47 @@ fn handle_client(
                             }
                         },
                         Packet::MessageCreate(msg) => {
+                            let timestamp = Utc::now().timestamp();
                             let id = get_id!();
                             let user = get_user(&db, id).unwrap();
-                            let packet = Packet::MessageReceive(common::MessageReceive {
-                                author: user,
-                                channel: msg.channel,
-                                id: 0,
-                                text: msg.text
-                            });
-                            let encoded = attempt_or!(common::serialize(&packet), {
-                                eprintln!("Failed to serialize message");
-                                close!();
-                            });
-                            assert!(encoded.len() < std::u16::MAX as usize);
-                            let size = common::encode_u16(encoded.len() as u16);
-                            sessions.borrow_mut().retain(|i, s| {
-                                match s.writer.write_all(&size)
-                                    .and_then(|_| s.writer.write_all(&encoded))
-                                    .and_then(|_| s.writer.flush()) {
-                                    Ok(ok) => ok,
-                                    Err(err) => {
-                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                            return false;
-                                        } else {
-                                            eprintln!("Failed to deliver message to User #{}", i);
-                                            eprintln!("Error kind: {}", err);
+                            if let Some(channel) = get_channel(&db, msg.channel) {
+                                db.execute(
+                                    "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
+                                    &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
+                                ).unwrap();
+                                let packet = Packet::MessageReceive(common::MessageReceive {
+                                    author: user,
+                                    channel: channel,
+                                    id: 0,
+                                    text: msg.text,
+                                    timestamp: timestamp,
+                                    timestamp_edit: None
+                                });
+                                let encoded = attempt_or!(common::serialize(&packet), {
+                                    eprintln!("Failed to serialize message");
+                                    close!();
+                                });
+                                assert!(encoded.len() < std::u16::MAX as usize);
+                                let size = common::encode_u16(encoded.len() as u16);
+                                sessions.borrow_mut().retain(|i, s| {
+                                    match s.writer.write_all(&size)
+                                        .and_then(|_| s.writer.write_all(&encoded))
+                                        .and_then(|_| s.writer.flush()) {
+                                        Ok(ok) => ok,
+                                        Err(err) => {
+                                            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                                return false;
+                                            } else {
+                                                eprintln!("Failed to deliver message to User #{}", i);
+                                                eprintln!("Error kind: {}", err);
+                                            }
                                         }
                                     }
-                                }
-                                true
-                            });
+                                    true
+                                });
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
                         },
                         Packet::Close => { close!(); }
                         _ => unimplemented!(),
