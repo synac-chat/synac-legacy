@@ -198,7 +198,7 @@ fn main() {
             };
 
             match File::create(path) {
-                Ok(mut file) => if let Err(err) = serde_json::to_writer(&mut file, &config) {
+                Ok(mut file) => if let Err(err) = serde_json::to_writer_pretty(&mut file, &config) {
                     eprintln!("Failed to generate default config: {}", err);
                 },
                 Err(err) => eprintln!("Failed to create default config: {}", err)
