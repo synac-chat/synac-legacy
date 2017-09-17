@@ -16,15 +16,15 @@ To prevent these... unfunny pranks... we set hard limits you may not bypass.
 
 ## Fancy Table
 
-|---------------------+------------+--------------------|
-| Type                | Hard limit | Default Soft limit |
-|---------------------+------------+--------------------|
-| Username length     | 128        | 32                 |
-| Channel name length | 128        | 32                 |
-| Attribute name      | 128        | 32                 |
-| Attribute amount    | 2048       | 128                |
-| Message length      | 16384      | 1024               |
-|---------------------+------------+--------------------|
+*.. means "between (inclusive)" in this case*
+
+| Type                  | Hard limit | Default Soft limit |
+| --------------------- | ---------- | ------------------ |
+| Username length       | 1..128     | 2..32              |
+| Channel name length   | 1..128     | 2..32              |
+| Attribute name length | 1..128     | 2..32              |
+| Attribute amount      | 2048       | 128                |
+| Message length        | 1..16384   | 1..1024            |
 
 ## Bypassing?
 

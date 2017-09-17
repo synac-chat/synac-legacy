@@ -4,12 +4,15 @@ version = "0.1.0"
 authors = ["jD91mZM2 <LEGOlord208@krake.one>"]
 
 [dependencies]
-bcrypt  = "0.1"
-chrono  = "0.4"
-futures = "0.1"
-openssl = "0.9"
+bcrypt   = "0.1"
+chrono   = "0.4"
+futures  = "0.1"
+openssl  = "0.9"
 rusqlite = "0.12"
-tokio-core = "0.1"
-tokio-io   = "0.1"
+serde    = "1.0"
+serde_derive  = "1.0"
+serde_json    = "1.0"
+tokio-core    = "0.1"
+tokio-io      = "0.1"
 tokio-openssl = "0.1"
 common = { path = "../common" }

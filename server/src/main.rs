@@ -4,6 +4,9 @@ extern crate common;
 extern crate futures;
 extern crate openssl;
 extern crate rusqlite;
+extern crate serde;
+#[macro_use] extern crate serde_derive;
+extern crate serde_json;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_openssl;
@@ -13,13 +16,14 @@ use futures::{Future, Stream};
 use openssl::pkcs12::Pkcs12;
 use openssl::rand;
 use openssl::ssl::{SslMethod, SslAcceptorBuilder};
-use rusqlite::Connection as SqlConnection;
+use rusqlite::{Connection as SqlConnection, Row as SqlRow};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write, BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
+use std::path::Path;
 use std::rc::Rc;
 use chrono::Utc;
 use tokio_core::net::{TcpListener, TcpStream};
@@ -36,6 +40,19 @@ macro_rules! attempt_or {
             }
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Config {
+    limit_user_name_min: usize,
+    limit_user_name_max: usize,
+    limit_channel_name_min: usize,
+    limit_channel_name_max: usize,
+    limit_attribute_name_min: usize,
+    limit_attribute_name_max: usize,
+    limit_attribute_amount_max: usize,
+    limit_message_min: usize,
+    limit_message_max: usize
 }
 
 fn main() {
@@ -133,6 +150,54 @@ fn main() {
         println!("{}", pem_str);
     }
 
+    let config: Config;
+    {
+        let path = Path::new("optional-config.json");
+        if path.exists() {
+            let mut file = attempt_or!(File::open(path), {
+                eprintln!("Failed to open config");
+                return;
+            });
+            config = attempt_or!(serde_json::from_reader(&mut file), {
+                eprintln!("Failed to deserialize config");
+                return;
+            });
+            macro_rules! is_invalid {
+                ($min:ident, $max:ident, $hard_max:expr) => {
+                    config.$min > config.$max || config.$min == 0 || config.$max > $hard_max
+                }
+            }
+            if is_invalid!(limit_user_name_min, limit_user_name_max, common::LIMIT_USER_NAME)
+                || is_invalid!(limit_channel_name_min, limit_channel_name_max, common::LIMIT_CHANNEL_NAME)
+                || is_invalid!(limit_attribute_name_min, limit_attribute_name_max, common::LIMIT_ATTR_NAME)
+                || config.limit_attribute_amount_max > common::LIMIT_ATTR_AMOUNT
+                || is_invalid!(limit_message_min, limit_message_max, common::LIMIT_MESSAGE) {
+
+                eprintln!("Your config is exceeding a hard limit");
+                return;
+            }
+        } else {
+            config = Config {
+                limit_user_name_min: 1,
+                limit_user_name_max: 32,
+                limit_channel_name_min: 1,
+                limit_channel_name_max: 32,
+                limit_attribute_name_min: 1,
+                limit_attribute_name_max: 32,
+                limit_attribute_amount_max: 128,
+                limit_message_min: 1,
+                limit_message_max: 1024
+            };
+
+            match File::create(path) {
+                Ok(mut file) => if let Err(err) = serde_json::to_writer(&mut file, &config) {
+                    eprintln!("Failed to generate default config: {}", err);
+                },
+                Err(err) => eprintln!("Failed to create default config: {}", err)
+            }
+        }
+    }
+
     let mut core = Core::new().expect("Could not start tokio core!");
     let handle = core.handle();
     let listener = attempt_or!(TcpListener::bind(&SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port), &handle), {
@@ -141,21 +206,22 @@ fn main() {
         return;
     });
 
-    let handle = Rc::new(handle);
+    let config = Rc::new(config);
+    let conn_id = Rc::new(RefCell::new(0usize));
     let db = Rc::new(db);
+    let handle = Rc::new(handle);
+    let sessions = Rc::new(RefCell::new(HashMap::new()));
 
     println!("I'm alive!");
-
-    let sessions = Rc::new(RefCell::new(HashMap::new()));
-    let conn_id = Rc::new(RefCell::new(0usize));
 
     let server = listener.incoming().for_each(|(conn, _)| {
         use tokio_io::AsyncRead;
 
-        let handle_clone = handle.clone();
-        let db_clone = db.clone();
-        let sessions_clone = sessions.clone();
+        let config_clone = config.clone();
         let conn_id_clone = conn_id.clone();
+        let db_clone = db.clone();
+        let handle_clone = handle.clone();
+        let sessions_clone = sessions.clone();
 
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
             let (reader, writer) = conn.split();
@@ -171,11 +237,12 @@ fn main() {
             });
 
             handle_client(
-                handle_clone,
-                db_clone,
-                sessions_clone,
+                config_clone,
                 my_conn_id,
-                reader
+                db_clone,
+                handle_clone,
+                reader,
+                sessions_clone
             );
 
             Ok(())
@@ -233,19 +300,22 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     }
 }
 fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
-    let mut stmt = db.prepare("SELECT allow, deny, id, name FROM channels WHERE id = ?").unwrap();
+    let mut stmt = db.prepare("SELECT * FROM channels WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
 
-        Some(common::Channel {
-            allow: get_list(&row.get::<_, String>(0)),
-            deny:  get_list(&row.get::<_, String>(1)),
-            id: row.get::<_, i64>(2) as usize,
-            name: row.get(3)
-        })
+        Some(get_channel_by_fields(row))
     } else {
         None
+    }
+}
+fn get_channel_by_fields(row: SqlRow) -> common::Channel {
+    common::Channel {
+        allow: get_list(&row.get::<_, String>(0)),
+        deny:  get_list(&row.get::<_, String>(1)),
+        id: row.get::<_, i64>(2) as usize,
+        name: row.get(3)
     }
 }
 // TODO These will probably be useful some time
@@ -260,7 +330,7 @@ fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
 //         None
 //     }
 // }
-// fn get_message_by_fields(row: rusqlite::Row) -> Option<common::Message> {
+// fn get_message_by_fields(row: SqlRow) -> Option<common::Message> {
 //     Some(common::Message {
 //         author: row.get::<_, i64>(0) as usize,
 //         channel: row.get::<_, i64>(1) as usize,
@@ -279,11 +349,12 @@ struct Session {
 }
 
 fn handle_client(
-        handle: Rc<Handle>,
-        db: Rc<SqlConnection>,
-        sessions: Rc<RefCell<HashMap<usize, Session>>>,
+        config: Rc<Config>,
         conn_id: usize,
+        db: Rc<SqlConnection>,
+        handle: Rc<Handle>,
         reader: BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
+        sessions: Rc<RefCell<HashMap<usize, Session>>>
     ) {
     macro_rules! close {
         () => {
@@ -382,7 +453,8 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_LOGIN_BOT));
                                 }
                             } else if let Some(password) = login.password {
-                                if login.name.len() > common::LIMIT_USER_NAME {
+                                if login.name.len() < config.limit_user_name_min
+                                    || login.name.len() > config.limit_user_name_min {
                                     reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                 } else {
                                     let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
@@ -413,7 +485,8 @@ fn handle_client(
                             let timestamp = Utc::now().timestamp();
                             let id = get_id!();
                             let user = get_user(&db, id).unwrap();
-                            if msg.text.len() > common::LIMIT_MESSAGE {
+                            if msg.text.len() < config.limit_message_min
+                                || msg.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else if let Some(channel) = get_channel(&db, msg.channel) {
                                 db.execute(
@@ -439,9 +512,10 @@ fn handle_client(
                                 &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
                             ).unwrap();
 
-                            if channel.name.len() > common::LIMIT_CHANNEL_NAME ||
-                                channel.allow.len() > common::LIMIT_ATTR_AMOUNT ||
-                                channel.deny.len() > common::LIMIT_ATTR_AMOUNT {
+                            if channel.name.len() < config.limit_channel_name_min
+                                || channel.name.len() > config.limit_channel_name_max
+                                || channel.allow.len() > config.limit_attribute_amount_max
+                                || channel.deny.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
                                 reply = Some(Packet::ChannelReceive(common::ChannelReceive {
@@ -462,11 +536,12 @@ fn handle_client(
                         Some(some) => some,
                         None => {
                             handle_client(
-                                handle_clone_clone_ugh,
-                                db,
-                                sessions,
+                                config,
                                 conn_id,
-                                reader
+                                db,
+                                handle_clone_clone_ugh,
+                                reader,
+                                sessions
                             );
                             return Ok(());
                         }
@@ -511,11 +586,12 @@ fn handle_client(
                     }
 
                     handle_client(
-                        handle_clone_clone_ugh,
-                        db,
-                        sessions,
+                        config,
                         conn_id,
-                        reader
+                        db,
+                        handle_clone_clone_ugh,
+                        reader,
+                        sessions
                     );
 
                     Ok(())
