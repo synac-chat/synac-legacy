@@ -29,10 +29,11 @@ macro_rules! flush {
 }
 
 pub struct Session {
-    stream: SslStream<TcpStream>,
-    id: usize,
+    attributes: HashMap<usize, common::Attribute>,
     channel: Option<usize>,
-    channels: HashMap<usize, common::Channel>
+    channels: HashMap<usize, common::Channel>,
+    id: usize,
+    stream: SslStream<TcpStream>
 }
 
 fn main() {
@@ -110,7 +111,7 @@ fn main() {
                                         session.channels.insert(event.inner.id, event.inner);
                                     },
                                     Ok(Packet::AttributeReceive(event)) => {
-                                        // TODO
+                                        session.attributes.insert(event.inner.id, event.inner);
                                     },
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
                                         println!("{}It appears this channel was deleted.", cursor::Restore);
@@ -422,10 +423,11 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                     stream_.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
                     *session = Some(Session {
-                        stream: stream_,
-                        id: id.unwrap(),
+                        attributes: HashMap::new(),
                         channel: None,
-                        channels: HashMap::new()
+                        channels: HashMap::new(),
+                        id: id.unwrap(),
+                        stream: stream_
                     });
                 },
                 "disconnect" => {
@@ -449,26 +451,34 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 "create" => {
-                    usage!(2, "create <\"channel\"> <name>");
+                    usage!(2, "create <\"channel\"/\"attribute\"> <name>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
-                    if args[0] == "channel" {
-                        let packet = Packet::ChannelCreate(common::ChannelCreate {
-                            allow: Vec::new(),
-                            deny: Vec::new(),
-                            name: args.remove(1)
-                        });
-
-                        if let Err(err) = common::write(&mut session.stream, &packet) {
-                            println!("Failed to send packet");
-                            println!("{}", err);
-                        }
-                    } else {
-                        println!("Can't create that!");
+                    let packet = match &*args[0] {
+                        "channel" => {
+                            Packet::ChannelCreate(common::ChannelCreate {
+                                allow: Vec::new(),
+                                deny: Vec::new(),
+                                name: args.remove(1)
+                            })
+                        },
+                        "attribute" => {
+                            Packet::AttributeCreate(common::AttributeCreate {
+                                allow: 0,
+                                deny: 0,
+                                name: args.remove(1),
+                                pos: session.attributes.len()
+                            })
+                        },
+                        _ => { println!("Can't create that"); continue; }
+                    };
+                    if let Err(err) = common::write(&mut session.stream, &packet) {
+                        println!("Failed to send packet");
+                        println!("{}", err);
                     }
                 },
                 "list" => {
-                    usage!(1, "list <\"channels\">");
+                    usage!(1, "list <\"channels\"/\"attributes\">");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     match &*args[0] {
@@ -485,7 +495,65 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             }
                             println!("{}", result);
                         },
-                        _ => {},
+                        "attributes" => {
+                            let mut result = String::new();
+                            // Read the above comment, thank you ---------------------------^
+                            let mut attributes: Vec<_> = session.attributes.values().collect();
+                            attributes.sort_by_key(|item| &item.name);
+                            for attribute in attributes {
+                                if !result.is_empty() { result.push_str(", "); }
+                                result.push_str(&attribute.name);
+                            }
+                            println!("{}", result);
+                        },
+                        _ => println!("Can't list that")
+                    }
+                },
+                "info" => {
+                    usage!(1, "info <channel or attribute name>");
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let mut name = &*args[0];
+                    if name.starts_with('#') {
+                        name = &name[1..];
+                    }
+
+                    let id = name.parse();
+
+                    println!();
+                    for channel in session.channels.values() {
+                        if name == channel.name || Ok(channel.id) == id {
+                            println!("Channel #{}", channel.name);
+                            println!("ID: #{}", channel.id);
+                            let mut allowed = String::new();
+                            for id in &channel.allow {
+                                for attribute in session.attributes.values() {
+                                    if attribute.id == *id {
+                                        if !allowed.is_empty() { allowed.push_str(", ") }
+                                        allowed.push_str(&attribute.name);
+                                    }
+                                }
+                            }
+                            println!("Allowed attributes: {}", allowed);
+                            let mut denied = String::new();
+                            for id in &channel.deny {
+                                for attribute in session.attributes.values() {
+                                    if attribute.id == *id {
+                                        if !denied.is_empty() { denied.push_str(", ") }
+                                        denied.push_str(&attribute.name);
+                                    }
+                                }
+                            }
+                            println!("Denied attributes: {}", denied);
+                        }
+                    }
+                    for attribute in session.attributes.values() {
+                        if name == attribute.name || Ok(attribute.id) == id {
+                            println!("Attribute {}", attribute.name);
+                            println!("ID: #{}", attribute.id);
+                            println!("Allow bitmask: {}", attribute.allow);
+                            println!("Deny bitmask: {}", attribute.deny);
+                        }
                     }
                 },
                 "join" => {

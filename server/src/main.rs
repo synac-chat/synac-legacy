@@ -44,6 +44,7 @@ macro_rules! attempt_or {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
+    server_owner_id: usize,
     limit_user_name_min: usize,
     limit_user_name_max: usize,
     limit_channel_name_min: usize,
@@ -186,6 +187,7 @@ fn main() {
             }
         } else {
             config = Config {
+                server_owner_id: 1,
                 limit_user_name_min: 1,
                 limit_user_name_max: 32,
                 limit_channel_name_min: 1,
@@ -270,6 +272,9 @@ fn gen_token() -> Result<String, openssl::error::ErrorStack> {
     }
 
     Ok(unsafe { String::from_utf8_unchecked(token) })
+}
+fn has_perm(config: &Config, user: usize, bitmask: u8, perm: u8) -> bool {
+    config.server_owner_id == user || bitmask & perm == perm
 }
 fn get_list(input: &str) -> Vec<usize> {
     input.split(',')
@@ -569,9 +574,12 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
                                 let id = get_id!();
-                                if get_attributes_combined_by_user(&db, id).unwrap()
-                                    & common::PERM_MANAGE_CHANNELS
-                                    != common::PERM_MANAGE_CHANNELS {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
