@@ -382,25 +382,29 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_LOGIN_BOT));
                                 }
                             } else if let Some(password) = login.password {
-                                let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
-                                    eprintln!("Failed to hash password");
-                                    close!();
-                                });
-                                let token = attempt_or!(gen_token(), {
-                                    eprintln!("Failed to generate random token");
-                                    close!();
-                                });
-                                db.execute(
-                                    "INSERT INTO users (bot, name, password, token) VALUES (?, ?, ?, ?)",
-                                    &[&login.bot, &login.name, &password, &token]
-                                ).unwrap();
-                                let id = db.last_insert_rowid() as usize;
-                                reply = Some(Packet::LoginSuccess(common::LoginSuccess {
-                                    created: true,
-                                    id: id,
-                                    token: token
-                                }));
-                                sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(id);
+                                if login.name.len() > common::LIMIT_USER_NAME {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                } else {
+                                    let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
+                                        eprintln!("Failed to hash password");
+                                        close!();
+                                    });
+                                    let token = attempt_or!(gen_token(), {
+                                        eprintln!("Failed to generate random token");
+                                        close!();
+                                    });
+                                    db.execute(
+                                        "INSERT INTO users (bot, name, password, token) VALUES (?, ?, ?, ?)",
+                                        &[&login.bot, &login.name, &password, &token]
+                                    ).unwrap();
+                                    let id = db.last_insert_rowid() as usize;
+                                    reply = Some(Packet::LoginSuccess(common::LoginSuccess {
+                                        created: true,
+                                        id: id,
+                                        token: token
+                                    }));
+                                    sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(id);
+                                }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
                             }
@@ -409,7 +413,9 @@ fn handle_client(
                             let timestamp = Utc::now().timestamp();
                             let id = get_id!();
                             let user = get_user(&db, id).unwrap();
-                            if let Some(channel) = get_channel(&db, msg.channel) {
+                            if msg.text.len() > common::LIMIT_MESSAGE {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(channel) = get_channel(&db, msg.channel) {
                                 db.execute(
                                     "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
                                     &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
@@ -433,14 +439,20 @@ fn handle_client(
                                 &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
                             ).unwrap();
 
-                            reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                inner: common::Channel {
-                                    allow: channel.allow,
-                                    deny:  channel.deny,
-                                    id: db.last_insert_rowid() as usize,
-                                    name: channel.name
-                                }
-                            }));
+                            if channel.name.len() > common::LIMIT_CHANNEL_NAME ||
+                                channel.allow.len() > common::LIMIT_ATTR_AMOUNT ||
+                                channel.deny.len() > common::LIMIT_ATTR_AMOUNT {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                    inner: common::Channel {
+                                        allow: channel.allow,
+                                        deny:  channel.deny,
+                                        id: db.last_insert_rowid() as usize,
+                                        name: channel.name
+                                    }
+                                }));
+                            }
                             broadcast = true;
                         },
                         _ => unimplemented!(),
@@ -470,7 +482,7 @@ fn handle_client(
                             eprintln!("Failed to serialize message");
                             close!();
                         });
-                        assert!(encoded.len() < std::u16::MAX as usize);
+                        assert!(encoded.len() <= std::u16::MAX as usize);
                         let size = common::encode_u16(encoded.len() as u16);
                         sessions.borrow_mut().retain(|i, s| {
                             match s.writer.write_all(&size)

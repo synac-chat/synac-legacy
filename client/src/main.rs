@@ -114,6 +114,11 @@ fn main() {
                                         sent_sender.send(()).unwrap();
                                         flush!();
                                     },
+                                    Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
+                                        println!("{}Too long!", cursor::Restore);
+                                        to_terminal_bottom();
+                                        flush!();
+                                    },
                                     Ok(_) => {
                                         unimplemented!();
                                     },
@@ -301,6 +306,10 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                     eprintln!("This account is a bot account.");
                                     continue;
                                 },
+                                common::ERR_LIMIT_REACHED => {
+                                    eprintln!("Username too long");
+                                    continue;
+                                },
                                 _ => {
                                     eprintln!("The server responded with an invalid error :/");
                                     continue;
@@ -369,6 +378,10 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 },
                                 common::ERR_LOGIN_BOT => {
                                     eprintln!("This account is a bot account.");
+                                    continue;
+                                },
+                                common::ERR_LIMIT_REACHED => {
+                                    eprintln!("Username too long");
                                     continue;
                                 },
                                 _ => {

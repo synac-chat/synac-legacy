@@ -5,13 +5,18 @@ extern crate serde;
 use std::io;
 
 pub const DEFAULT_PORT: u16 = 8439;
-pub const RSA_KEY_BIT_LEN: u32 = 3072;
+pub const LIMIT_USER_NAME:    usize = 128;
+pub const LIMIT_CHANNEL_NAME: usize = 128;
+pub const LIMIT_ATTR_NAME:    usize = 128;
+pub const LIMIT_ATTR_AMOUNT:  usize = 2048;
+pub const LIMIT_MESSAGE:      usize = 16384;
 
 pub const ERR_LOGIN_INVALID: u8 = 0;
 pub const ERR_LOGIN_BANNED:  u8 = 1;
 pub const ERR_LOGIN_EMPTY:   u8 = 2;
 pub const ERR_LOGIN_BOT:     u8 = 3;
 pub const ERR_UNKNOWN_CHANNEL: u8 = 4;
+pub const ERR_LIMIT_REACHED: u8 = 5;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
