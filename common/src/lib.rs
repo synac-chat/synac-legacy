@@ -17,12 +17,22 @@ pub const ERR_LOGIN_EMPTY:   u8 = 2;
 pub const ERR_LOGIN_BOT:     u8 = 3;
 pub const ERR_UNKNOWN_CHANNEL: u8 = 4;
 pub const ERR_LIMIT_REACHED: u8 = 5;
+pub const ERR_MISSING_PERMISSION: u8 = 6;
+
+pub const PERM_READ:  u8 = 1;
+pub const PERM_WRITE: u8 = 1 << 1;
+pub const PERM_NICK:  u8 = 1 << 2;
+pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 3;
+pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 4;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Attribute {
+    pub allow: u8,
+    pub deny: u8,
     pub id: usize,
-    pub name: String
+    pub name: String,
+    pub pos: usize
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User {
@@ -58,7 +68,20 @@ pub struct Login {
     pub token: Option<String>
 }
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ChannelList {}
+pub struct AttributeCreate {
+    pub allow: u8,
+    pub deny: u8,
+    pub name: String,
+    pub pos: usize
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AttributeUpdate {
+    pub inner: Attribute
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AttributeDelete {
+    pub id: usize
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelCreate {
     pub allow: Vec<usize>,
@@ -108,6 +131,10 @@ pub struct LoginSuccess {
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug)]
+pub struct AttributeReceive {
+    pub inner: Attribute
+}
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelReceive {
     pub inner: Channel
 }
@@ -141,7 +168,9 @@ macro_rules! packet {
 }
 packet! {
     Login,
-    ChannelList,
+    AttributeCreate,
+    AttributeUpdate,
+    AttributeDelete,
     ChannelCreate,
     ChannelUpdate,
     ChannelDelete,
@@ -152,6 +181,7 @@ packet! {
     Command,
 
     LoginSuccess,
+    AttributeReceive,
     ChannelReceive,
     MessageReceive,
     CommandReceive
@@ -214,4 +244,14 @@ pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Box<st
     writer.flush()?;
 
     Ok(())
+}
+
+pub fn combine<I: Iterator<Item = (u8, u8)>>(attributes: &mut I) -> u8 {
+    // Expects attributes to be sorted
+    let mut result = 0;
+    for attribute in attributes {
+        result |= attribute.0;  // allow
+        result &= !attribute.1; // deny
+    }
+    result
 }

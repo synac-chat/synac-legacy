@@ -89,6 +89,14 @@ fn main() {
                     timestamp_edit  INTEGER
                 )", &[])
         .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS attributes (
+                    allow   INTEGER NOT NULL,
+                    deny    INTEGER NOT NULL,
+                    id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    name    TEXT NOT NULL,
+                    pos     INTEGER NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
 
     let mut args = env::args();
     args.next();
@@ -294,12 +302,53 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
         None
     }
 }
+fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
+    let mut stmt = db.prepare("SELECT * FROM attributes WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+        Some(get_attribute_by_fields(&row))
+    } else {
+        None
+    }
+}
+fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
+    common::Attribute {
+        allow: row.get(0),
+        deny: row.get(1),
+        id: row.get::<_, i64>(2) as usize,
+        name: row.get(3),
+        pos:  row.get::<_, i64>(4) as usize
+    }
+}
+fn get_attributes_combined(db: &SqlConnection, ids: &[usize]) -> u8 {
+    let mut query = String::with_capacity(40);
+    query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
+    query.push_str(&to_list(ids));
+    query.push_str(")");
+    let mut stmt = db.prepare(&query).unwrap();
+    let rows = stmt.query_map(&[], |row| (row.get(0), row.get(1))).unwrap();
+    let mut rows = rows.map(|row| row.unwrap());
+
+    common::combine(&mut rows)
+}
+fn get_attributes_combined_by_user(db: &SqlConnection, id: usize) -> Option<u8> {
+    let mut stmt = db.prepare("SELECT attributes FROM users WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+
+    if let Some(row) = rows.next() {
+        // Yes I realize I could pass row.get(0) directly.
+        // However, what about SQL injections?
+        Some(get_attributes_combined(db, &get_list(&row.unwrap().get::<_, String>(0))))
+    } else {
+        None
+    }
+}
 fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
     let mut stmt = db.prepare("SELECT * FROM channels WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
-
         Some(get_channel_by_fields(&row))
     } else {
         None
@@ -313,28 +362,27 @@ fn get_channel_by_fields(row: &SqlRow) -> common::Channel {
         name: row.get(3)
     }
 }
-// TODO These will probably be useful some time
-// fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
-//     let mut stmt = db.prepare("SELECT * FROM messages WHERE id = ?")
-//         .unwrap();
-//     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-//     if let Some(row) = rows.next() {
-//         let row = row.unwrap();
-//         get_message_by_fields(&row)
-//     } else {
-//         None
-//     }
-// }
-// fn get_message_by_fields(row: &SqlRow) -> Option<common::Message> {
-//     Some(common::Message {
-//         author: row.get::<_, i64>(0) as usize,
-//         channel: row.get::<_, i64>(1) as usize,
-//         id: row.get::<_, i64>(2) as usize,
-//         text: row.get(3),
-//         timestamp: row.get(4),
-//         timestamp_edit: row.get(5)
-//     })
-// }
+fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
+    let mut stmt = db.prepare("SELECT * FROM messages WHERE id = ?")
+        .unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+        get_message_by_fields(&row)
+    } else {
+        None
+    }
+}
+fn get_message_by_fields(row: &SqlRow) -> Option<common::Message> {
+    Some(common::Message {
+        author: row.get::<_, i64>(0) as usize,
+        channel: row.get::<_, i64>(1) as usize,
+        id: row.get::<_, i64>(2) as usize,
+        text: row.get(3),
+        timestamp: row.get(4),
+        timestamp_edit: row.get(5)
+    })
+}
 
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -487,17 +535,19 @@ fn handle_client(
                             }
                         },
                         Packet::MessageCreate(msg) => {
-                            let timestamp = Utc::now().timestamp();
-                            let id = get_id!();
-                            let user = get_user(&db, id).unwrap();
                             if msg.text.len() < config.limit_message_min
                                 || msg.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else if let Some(channel) = get_channel(&db, msg.channel) {
+                                let timestamp = Utc::now().timestamp();
+                                let id = get_id!();
+                                let user = get_user(&db, id).unwrap();
+
                                 db.execute(
                                     "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
                                     &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
                                 ).unwrap();
+
                                 reply = Some(Packet::MessageReceive(common::MessageReceive {
                                     author: user,
                                     channel: channel,
@@ -512,29 +562,68 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelCreate(channel) => {
-                            db.execute(
-                                "INSERT INTO channels (allow, deny, name) VALUES (?, ?, ?)",
-                                &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
-                            ).unwrap();
-
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.allow.len() > config.limit_attribute_amount_max
                                 || channel.deny.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                    inner: common::Channel {
-                                        allow: channel.allow,
-                                        deny:  channel.deny,
-                                        id: db.last_insert_rowid() as usize,
-                                        name: channel.name
-                                    }
-                                }));
+                                let id = get_id!();
+                                if get_attributes_combined_by_user(&db, id).unwrap()
+                                    & common::PERM_MANAGE_CHANNELS
+                                    != common::PERM_MANAGE_CHANNELS {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "INSERT INTO channels (allow, deny, name) VALUES (?, ?, ?)",
+                                        &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                        inner: common::Channel {
+                                            allow: channel.allow,
+                                            deny:  channel.deny,
+                                            id: db.last_insert_rowid() as usize,
+                                            name: channel.name
+                                        }
+                                    }));
+                                }
                             }
                             broadcast = true;
                         },
-                        _ => unimplemented!(),
+                        Packet::AttributeCreate(attr) => {
+                            if attr.name.len() < config.limit_attribute_name_min
+                                || attr.name.len() > config.limit_attribute_name_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                let _ = get_id!();
+                                let count: i32 = db.query_row(
+                                    "SELECT COUNT(*) FROM attributes",
+                                    &[],
+                                    |row| row.get(0)
+                                ).unwrap();
+
+                                if count as usize > config.limit_attribute_amount_max {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                } else {
+                                    db.execute(
+                                        "INSERT INTO attributes (allow, deny, name, pos) VALUES (?, ?, ?, ?)",
+                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64)]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
+                                        inner: common::Attribute {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: db.last_insert_rowid() as usize,
+                                            name: attr.name,
+                                            pos: attr.pos
+                                        }
+                                    }));
+                                }
+                            }
+                        },
+                        _ => unimplemented!()
                     }
 
                     let reply = match reply {
@@ -589,18 +678,34 @@ fn handle_client(
                         });
 
                         if send_init {
-                            let mut stmt = db.prepare("SELECT * FROM channels").unwrap();
-                            let mut rows = stmt.query(&[]).unwrap();
+                            {
+                                let mut stmt = db.prepare("SELECT * FROM attributes").unwrap();
+                                let mut rows = stmt.query(&[]).unwrap();
 
-                            while let Some(row) = rows.next() {
-                                let row = row.unwrap();
+                                while let Some(row) = rows.next() {
+                                    let row = row.unwrap();
 
-                                let packet = Packet::ChannelReceive(common::ChannelReceive {
-                                    inner: get_channel_by_fields(&row),
-                                });
-                                attempt_or!(common::write(writer, &packet), {
-                                    eprintln!("Failed to send channel to user");
-                                });
+                                    let packet = Packet::AttributeReceive(common::AttributeReceive {
+                                        inner: get_attribute_by_fields(&row),
+                                    });
+                                    attempt_or!(common::write(writer, &packet), {
+                                        eprintln!("Failed to send channel to user");
+                                    });
+                                }
+                            } {
+                                let mut stmt = db.prepare("SELECT * FROM channels").unwrap();
+                                let mut rows = stmt.query(&[]).unwrap();
+
+                                while let Some(row) = rows.next() {
+                                    let row = row.unwrap();
+
+                                    let packet = Packet::ChannelReceive(common::ChannelReceive {
+                                        inner: get_channel_by_fields(&row),
+                                    });
+                                    attempt_or!(common::write(writer, &packet), {
+                                        eprintln!("Failed to send channel to user");
+                                    });
+                                }
                             }
                         }
                     }
