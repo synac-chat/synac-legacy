@@ -271,19 +271,14 @@ fn get_list(input: &str) -> Vec<usize> {
 }
 fn to_list(input: &[usize]) -> String {
     let mut result = String::new();
-    let mut first = true;
     for i in input {
-        if first {
-            first = false;
-        } else {
-            result.push(',');
-        }
+        if !result.is_empty() { result.push(','); }
         result.push_str(&i.to_string());
     }
     result
 }
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
-    let mut stmt = db.prepare("SELECT attributes, bot, id, name, nick FROM users WHERE id = ?").unwrap();
+    let mut stmt = db.prepare("SELECT * FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
@@ -305,12 +300,12 @@ fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
     if let Some(row) = rows.next() {
         let row = row.unwrap();
 
-        Some(get_channel_by_fields(row))
+        Some(get_channel_by_fields(&row))
     } else {
         None
     }
 }
-fn get_channel_by_fields(row: SqlRow) -> common::Channel {
+fn get_channel_by_fields(row: &SqlRow) -> common::Channel {
     common::Channel {
         allow: get_list(&row.get::<_, String>(0)),
         deny:  get_list(&row.get::<_, String>(1)),
@@ -320,17 +315,17 @@ fn get_channel_by_fields(row: SqlRow) -> common::Channel {
 }
 // TODO These will probably be useful some time
 // fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
-//     let mut stmt = db.prepare("SELECT author, channel, id, text, timestamp, timestamp_edit FROM messages WHERE id = ?")
+//     let mut stmt = db.prepare("SELECT * FROM messages WHERE id = ?")
 //         .unwrap();
 //     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 //     if let Some(row) = rows.next() {
 //         let row = row.unwrap();
-//         get_message_by_fields(row)
+//         get_message_by_fields(&row)
 //     } else {
 //         None
 //     }
 // }
-// fn get_message_by_fields(row: SqlRow) -> Option<common::Message> {
+// fn get_message_by_fields(row: &SqlRow) -> Option<common::Message> {
 //     Some(common::Message {
 //         author: row.get::<_, i64>(0) as usize,
 //         channel: row.get::<_, i64>(1) as usize,
@@ -397,6 +392,7 @@ fn handle_client(
 
                     let mut broadcast = false;
                     let mut reply = None;
+                    let mut send_init = false;
 
                     match packet {
                         Packet::Close => { close!(); }
@@ -431,7 +427,10 @@ fn handle_client(
                                                 id: row_id,
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
+                                            sessions.borrow_mut()
+                                                .get_mut(&conn_id).unwrap()
+                                                .id = Some(row_id);
+                                            send_init = true;
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -442,7 +441,10 @@ fn handle_client(
                                                 id: row_id,
                                                 token: token
                                             }));
-                                            sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(row_id);
+                                            sessions.borrow_mut()
+                                                .get_mut(&conn_id).unwrap()
+                                                .id = Some(row_id);
+                                            send_init = true;
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
@@ -475,7 +477,10 @@ fn handle_client(
                                         id: id,
                                         token: token
                                     }));
-                                    sessions.borrow_mut().get_mut(&conn_id).unwrap().id = Some(id);
+                                    sessions.borrow_mut()
+                                        .get_mut(&conn_id).unwrap()
+                                        .id = Some(id);
+                                    send_init = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
@@ -581,8 +586,23 @@ fn handle_client(
 
                         attempt_or!(common::write(writer, &reply), {
                             eprintln!("Failed to send reply");
-                            close!();
                         });
+
+                        if send_init {
+                            let mut stmt = db.prepare("SELECT * FROM channels").unwrap();
+                            let mut rows = stmt.query(&[]).unwrap();
+
+                            while let Some(row) = rows.next() {
+                                let row = row.unwrap();
+
+                                let packet = Packet::ChannelReceive(common::ChannelReceive {
+                                    inner: get_channel_by_fields(&row),
+                                });
+                                attempt_or!(common::write(writer, &packet), {
+                                    eprintln!("Failed to send channel to user");
+                                });
+                            }
+                        }
                     }
 
                     handle_client(

@@ -176,6 +176,18 @@ fn main() {
                 }
             }
 
+            macro_rules! require_session {
+                ($session:expr) => {
+                    match *$session {
+                        Some(ref mut s) => s,
+                        None => {
+                            eprintln!("You're not connected to a server");
+                            continue;
+                        }
+                    }
+                }
+            }
+
             match &*command {
                 "nick" => {
                     usage!(1, "nick <name>");
@@ -411,11 +423,9 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                 "disconnect" => {
                     usage!(0, "disconnect");
                     let mut session = session.lock().unwrap();
-                    if let Some(ref mut session) = *session {
+                    {
+                        let session = require_session!(session);
                         let _ = common::write(&mut session.stream, &Packet::Close);
-                    } else {
-                        eprintln!("You're not connected to a server");
-                        continue;
                     }
                     *session = None;
                 },
@@ -432,49 +442,64 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                 },
                 "create" => {
                     usage!(2, "create <\"channel\"> <name>");
-                    match *session.lock().unwrap() {
-                        None => {
-                            eprintln!("You're not connected to a server");
-                            continue;
-                        },
-                        Some(ref mut session) => {
-                            if args[0] == "channel" {
-                                let packet = Packet::ChannelCreate(common::ChannelCreate {
-                                    allow: Vec::new(),
-                                    deny: Vec::new(),
-                                    name: args.remove(1)
-                                });
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    if args[0] == "channel" {
+                        let packet = Packet::ChannelCreate(common::ChannelCreate {
+                            allow: Vec::new(),
+                            deny: Vec::new(),
+                            name: args.remove(1)
+                        });
 
-                                if let Err(err) = common::write(&mut session.stream, &packet) {
-                                    eprintln!("Failed to send packet");
-                                    eprintln!("{}", err);
-                                }
-                            } else {
-                                eprintln!("Can't create that!");
-                            }
+                        if let Err(err) = common::write(&mut session.stream, &packet) {
+                            eprintln!("Failed to send packet");
+                            eprintln!("{}", err);
                         }
+                    } else {
+                        eprintln!("Can't create that!");
+                    }
+                },
+                "list" => {
+                    usage!(1, "list <\"channels\">");
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    match &*args[0] {
+                        "channels" => {
+                            let mut result = String::new();
+                            // Yeah, cloning this is bad... But what can I do? I need to sort!
+                            // Though, I suspect this might be a shallow copy.
+                            let mut channels: Vec<_> = session.channels.values().collect();
+                            channels.sort_by_key(|item| &item.name);
+                            for channel in channels {
+                                if !result.is_empty() { result.push_str(", "); }
+                                result.push('#');
+                                result.push_str(&channel.name);
+                            }
+                            println!("{}", result);
+                        },
+                        _ => {},
                     }
                 },
                 "join" => {
                     usage!(1, "join <channel name>");
-                    match *session.lock().unwrap() {
-                        None => {
-                            eprintln!("You're not connected to a server");
-                            continue;
-                        },
-                        Some(ref mut session) => {
-                            let mut name = &*args[0];
-                            if name.starts_with('#') {
-                                name = &name[1..];
-                            }
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let mut name = &*args[0];
+                    if name.starts_with('#') {
+                        name = &name[1..];
+                    }
 
-                            for channel in session.channels.values() {
-                                if channel.name == name {
-                                    session.channel = Some(channel.id);
-                                    break;
-                                }
-                            }
+                    let mut found = false;
+                    for channel in session.channels.values() {
+                        if channel.name == name {
+                            session.channel = Some(channel.id);
+                            println!("Joined channel #{}", channel.name);
+                            found = true;
+                            break;
                         }
+                    }
+                    if !found {
+                        println!("No channel found with that name");
                     }
                 },
                 _ => {
@@ -504,7 +529,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         continue;
                     }
                 } else {
-                    println!("No channel specified. See /create channel, /join and /list");
+                    println!("No channel specified. See /create channel, /list channels and /join");
                     continue;
                 }
             }
