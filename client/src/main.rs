@@ -75,7 +75,7 @@ fn main() {
     println!("/connect <ip>");
     println!();
 
-    let (sent_sender, sent_receiver) = mpsc::channel();
+    let (sent_sender, sent_receiver) = mpsc::sync_channel(0);
 
     thread::spawn(move || {
         let mut size = true;
@@ -97,13 +97,9 @@ fn main() {
                                 match common::deserialize(&buf) {
                                     Ok(Packet::MessageReceive(msg)) => {
                                         if session.channel == Some(msg.channel.id) {
-                                            println!("{}{}: {}", cursor::Restore, msg.author.name,
+                                            println!("{}\r{}: {}", cursor::Restore, msg.author.name,
                                                      String::from_utf8_lossy(&msg.text));
-                                            if msg.new && msg.author.id == session.id {
-                                                sent_sender.send(()).unwrap();
-                                            } else {
-                                                to_terminal_bottom();
-                                            }
+                                            to_terminal_bottom();
                                             flush!();
                                         }
                                     },
@@ -131,7 +127,7 @@ fn main() {
                                         flush!();
                                     },
                                     Ok(Packet::Err(common::ERR_MISSING_PERMISSION)) => {
-                                        println!("{}Missing permission", cursor::Restore);
+                                        println!("{}\rMissing permission", cursor::Restore);
                                         to_terminal_bottom();
                                         flush!();
                                     },
@@ -153,6 +149,7 @@ fn main() {
                                 buf = vec![0; 2];
                                 i = 0;
                             }
+                            let _ = sent_sender.try_send(());
                         }
                     },
                     Err(_) => {}
@@ -614,7 +611,9 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             }
         }
         // Could only happen if message was sent
-        sent_receiver.recv().unwrap();
+        if let Err(mpsc::RecvTimeoutError::Timeout) = sent_receiver.recv_timeout(Duration::from_secs(2)) {
+            println!("Failed to verify message was received...");
+        }
     }
 }
 
