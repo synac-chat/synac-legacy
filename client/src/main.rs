@@ -469,8 +469,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     let packet = match &*args[0] {
                         "channel" => {
                             Packet::ChannelCreate(common::ChannelCreate {
-                                allow: Vec::new(),
-                                deny: Vec::new(),
+                                overrides: Vec::new(),
                                 name: args.remove(1)
                             })
                         },
@@ -537,26 +536,6 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     for channel in session.channels.values() {
                         if name == channel.name || Ok(channel.id) == id {
                             println!("Channel #{}", channel.name);
-                            let mut allowed = String::new();
-                            for id in &channel.allow {
-                                for attribute in session.attributes.values() {
-                                    if attribute.id == *id {
-                                        if !allowed.is_empty() { allowed.push_str(", ") }
-                                        allowed.push_str(&attribute.name);
-                                    }
-                                }
-                            }
-                            println!("Allowed attributes: {}", allowed);
-                            let mut denied = String::new();
-                            for id in &channel.deny {
-                                for attribute in session.attributes.values() {
-                                    if attribute.id == *id {
-                                        if !denied.is_empty() { denied.push_str(", ") }
-                                        denied.push_str(&attribute.name);
-                                    }
-                                }
-                            }
-                            println!("Denied attributes: {}", denied);
                             println!("ID: #{}", channel.id);
                         }
                     }

@@ -75,10 +75,9 @@ fn main() {
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS channels (
-                    allow   TEXT NOT NULL DEFAULT '',
-                    deny    TEXT NOT NULL DEFAULT '',
-                    id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    name    TEXT NOT NULL
+                    overrides   TEXT NOT NULL DEFAULT '',
+                    id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS messages (
@@ -282,12 +281,38 @@ fn get_list(input: &str) -> Vec<usize> {
         .map(|s| s.parse().expect("The database is broken. Congratz. You made me crash."))
         .collect()
 }
-fn to_list(input: &[usize]) -> String {
+fn from_list(input: &[usize]) -> String {
     let mut result = String::new();
     for i in input {
         if !result.is_empty() { result.push(','); }
         result.push_str(&i.to_string());
     }
+    result
+}
+fn get_map(input: &[usize]) -> Vec<(usize, (u8, u8))> {
+    let mut result = Vec::new();
+    let mut buf = (None, None);
+
+    for item in input {
+        match buf {
+            (None, None) => buf = (Some(*item), None),
+            (Some(item1), None) => buf = (Some(item1), Some(*item as u8)),
+            (Some(item1), Some(item2)) => result.push((item1, (item2, *item as u8))),
+            _ => unreachable!()
+        }
+    }
+
+    result
+}
+fn from_map(input: &[(usize, (u8, u8))]) -> Vec<usize> {
+    let mut result = Vec::new();
+
+    for item in input {
+        result.push(item.0);
+        result.push((item.1).0 as usize);
+        result.push((item.1).1 as usize);
+    }
+
     result
 }
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
@@ -326,29 +351,38 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
         pos:  row.get::<_, i64>(4) as usize
     }
 }
-fn get_attributes_combined(db: &SqlConnection, ids: &[usize]) -> u8 {
+fn calculate_permissions(db: &SqlConnection, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
     if ids.is_empty() {
         return 0;
     }
 
     let mut query = String::with_capacity(48+1+14);
     query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
-    query.push_str(&to_list(ids));
+    query.push_str(&from_list(ids));
     query.push_str(") ORDER BY pos");
     let mut stmt = db.prepare(&query).unwrap();
     let rows = stmt.query_map(&[], |row| (row.get(0), row.get(1))).unwrap();
     let mut rows = rows.map(|row| row.unwrap());
 
-    common::combine(&mut rows)
+    let mut perms = 0;
+    common::perm_apply_iter(&mut perms, &mut rows);
+
+    for &(role, chan_perms) in chan_overrides {
+        if ids.contains(&role) {
+            common::perm_apply(&mut perms, chan_perms);
+        }
+    }
+
+    perms
 }
-fn get_attributes_combined_by_user(db: &SqlConnection, id: usize) -> Option<u8> {
+fn calculate_permissions_by_user(db: &SqlConnection, id: usize, chan_overrides: &[(usize, (u8, u8))]) -> Option<u8> {
     let mut stmt = db.prepare("SELECT attributes FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 
     if let Some(row) = rows.next() {
         // Yes I realize I could pass row.get(0) directly.
         // However, what about SQL injections?
-        Some(get_attributes_combined(db, &get_list(&row.unwrap().get::<_, String>(0))))
+        Some(calculate_permissions(db, &get_list(&row.unwrap().get::<_, String>(0)), chan_overrides))
     } else {
         None
     }
@@ -365,10 +399,9 @@ fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
 }
 fn get_channel_by_fields(row: &SqlRow) -> common::Channel {
     common::Channel {
-        allow: get_list(&row.get::<_, String>(0)),
-        deny:  get_list(&row.get::<_, String>(1)),
-        id: row.get::<_, i64>(2) as usize,
-        name: row.get(3)
+        overrides: get_map(&get_list(&row.get::<_, String>(0))),
+        id: row.get::<_, i64>(1) as usize,
+        name: row.get(2)
     }
 }
 fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
@@ -410,7 +443,6 @@ fn handle_client(
     ) {
     macro_rules! close {
         () => {
-            println!("Closing connection");
             sessions.borrow_mut().remove(&conn_id);
             return Ok(());
         }
@@ -513,7 +545,7 @@ fn handle_client(
                                 }
                             } else if let Some(password) = login.password {
                                 if login.name.len() < config.limit_user_name_min
-                                    || login.name.len() > config.limit_user_name_min {
+                                    || login.name.len() > config.limit_user_name_max {
                                     reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                 } else {
                                     let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
@@ -555,7 +587,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    get_attributes_combined(&db, &user.attributes),
+                                    calculate_permissions(&db, &user.attributes, &channel.overrides),
                                     common::PERM_WRITE
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -583,28 +615,29 @@ fn handle_client(
                         Packet::ChannelCreate(channel) => {
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
-                                || channel.allow.len() > config.limit_attribute_amount_max
-                                || channel.deny.len() > config.limit_attribute_amount_max {
+                                || channel.overrides.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
                                 let id = get_id!();
                                 if !has_perm(
                                     &config,
                                     id,
-                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
                                     common::PERM_MANAGE_CHANNELS
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
-                                        "INSERT INTO channels (allow, deny, name) VALUES (?, ?, ?)",
-                                        &[&to_list(&channel.allow), &to_list(&channel.deny), &channel.name]
+                                        "INSERT INTO channels (overrides, name) VALUES (?, ?)",
+                                        &[
+                                            &from_list(&from_map(&channel.overrides)),
+                                            &channel.name
+                                        ]
                                     ).unwrap();
 
                                     reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                         inner: common::Channel {
-                                            allow: channel.allow,
-                                            deny:  channel.deny,
+                                            overrides:  channel.overrides,
                                             id: db.last_insert_rowid() as usize,
                                             name: channel.name
                                         }
@@ -622,7 +655,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
                                     common::PERM_MANAGE_ATTRIBUTES
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -664,13 +697,17 @@ fn handle_client(
                         Packet::MessageList(params) => {
                             // Cheap trick to break out at any time.
                             let id = get_id!();
+                            let channel = get_channel(&db, params.channel);
                             loop {
                                 let mut stmt;
                                 let mut rows;
-                                if !has_perm(
+                                if channel.is_none() {
+                                    reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                                    break;
+                                } else if !has_perm(
                                     &config,
                                     id,
-                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    calculate_permissions_by_user(&db, id, &channel.unwrap().overrides).unwrap(),
                                     common::PERM_READ
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));

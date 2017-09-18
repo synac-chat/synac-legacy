@@ -5,6 +5,7 @@ extern crate serde;
 use std::io;
 
 pub const DEFAULT_PORT: u16 = 8439;
+
 pub const LIMIT_USER_NAME:    usize = 128;
 pub const LIMIT_CHANNEL_NAME: usize = 128;
 pub const LIMIT_ATTR_NAME:    usize = 128;
@@ -47,10 +48,9 @@ pub struct User {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Channel {
-    pub allow: Vec<usize>,
-    pub deny:  Vec<usize>,
     pub id: usize,
-    pub name: String
+    pub name: String,
+    pub overrides: Vec<(usize, (u8, u8))>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Message {
@@ -87,9 +87,8 @@ pub struct AttributeDelete {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelCreate {
-    pub allow: Vec<usize>,
-    pub deny:  Vec<usize>,
-    pub name: String
+    pub name: String,
+    pub overrides: Vec<(usize, (u8, u8))>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelUpdate {
@@ -254,12 +253,13 @@ pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Box<st
     Ok(())
 }
 
-pub fn combine<I: Iterator<Item = (u8, u8)>>(attributes: &mut I) -> u8 {
+pub fn perm_apply_iter<'a, I: Iterator<Item = (u8, u8)>>(into: &mut u8, attributes: &mut I) {
     // Expects attributes to be sorted
-    let mut result = 0;
     for attribute in attributes {
-        result |= attribute.0;  // allow
-        result &= !attribute.1; // deny
+        perm_apply(into, attribute);
     }
-    result
+}
+pub fn perm_apply(into: &mut u8, (allow, deny): (u8, u8)) {
+    *into |= allow;
+    *into &= !deny;
 }
