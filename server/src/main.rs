@@ -316,7 +316,7 @@ fn from_map(input: &[(usize, (u8, u8))]) -> Vec<usize> {
     result
 }
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
-    let mut stmt = db.prepare("SELECT * FROM users WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT * FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
@@ -333,7 +333,7 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     }
 }
 fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
-    let mut stmt = db.prepare("SELECT * FROM attributes WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT * FROM attributes WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
@@ -376,7 +376,7 @@ fn calculate_permissions(db: &SqlConnection, ids: &[usize], chan_overrides: &[(u
     perms
 }
 fn calculate_permissions_by_user(db: &SqlConnection, id: usize, chan_overrides: &[(usize, (u8, u8))]) -> Option<u8> {
-    let mut stmt = db.prepare("SELECT attributes FROM users WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT attributes FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 
     if let Some(row) = rows.next() {
@@ -388,7 +388,7 @@ fn calculate_permissions_by_user(db: &SqlConnection, id: usize, chan_overrides: 
     }
 }
 fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
-    let mut stmt = db.prepare("SELECT * FROM channels WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT * FROM channels WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
@@ -405,7 +405,7 @@ fn get_channel_by_fields(row: &SqlRow) -> common::Channel {
     }
 }
 fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
-    let mut stmt = db.prepare("SELECT * FROM messages WHERE id = ?")
+    let mut stmt = db.prepare_cached("SELECT * FROM messages WHERE id = ?")
         .unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
@@ -486,7 +486,8 @@ fn handle_client(
                     match packet {
                         Packet::Close => { close!(); }
                         Packet::Login(login) => {
-                            let mut stmt = db.prepare("SELECT id, bot, token, password FROM users WHERE name = ?").unwrap();
+                            let mut stmt = db.prepare_cached("SELECT id, bot, token, password FROM users WHERE name = ?")
+                                .unwrap();
                             let mut rows = stmt.query(&[&login.name]).unwrap();
 
                             if let Some(row) = rows.next() {
@@ -716,7 +717,7 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                     break;
                                 } else if let Some(after) = params.after {
-                                    stmt = db.prepare(
+                                    stmt = db.prepare_cached(
                                         "SELECT * FROM messages
                                         WHERE channel = ? AND timestamp >=
                                         (SELECT timestamp FROM messages WHERE id = ?)
@@ -729,7 +730,7 @@ fn handle_client(
                                         &(params.limit as i64)
                                     ]).unwrap();
                                 } else if let Some(before) = params.before {
-                                    stmt = db.prepare(
+                                    stmt = db.prepare_cached(
                                         "SELECT * FROM messages
                                         WHERE channel = ? AND timestamp <=
                                         (SELECT timestamp FROM messages WHERE id = ?)
@@ -742,7 +743,7 @@ fn handle_client(
                                         &(params.limit as i64)
                                     ]).unwrap();
                                 } else {
-                                    stmt = db.prepare(
+                                    stmt = db.prepare_cached(
                                         "SELECT * FROM
                                         (SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?)
                                         ORDER BY timestamp",
@@ -839,7 +840,7 @@ fn handle_client(
 
                         if send_init {
                             {
-                                let mut stmt = db.prepare("SELECT * FROM attributes").unwrap();
+                                let mut stmt = db.prepare_cached("SELECT * FROM attributes").unwrap();
                                 let mut rows = stmt.query(&[]).unwrap();
 
                                 while let Some(row) = rows.next() {
@@ -854,7 +855,7 @@ fn handle_client(
                                     });
                                 }
                             } {
-                                let mut stmt = db.prepare("SELECT * FROM channels").unwrap();
+                                let mut stmt = db.prepare_cached("SELECT * FROM channels").unwrap();
                                 let mut rows = stmt.query(&[]).unwrap();
 
                                 while let Some(row) = rows.next() {
