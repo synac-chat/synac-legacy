@@ -263,6 +263,8 @@ fn main() {
     core.run(server).expect("Could not run tokio core!");
 }
 
+pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
 fn gen_token() -> Result<String, openssl::error::ErrorStack> {
     let mut token = vec![0; 64];
     rand::rand_bytes(&mut token)?;
@@ -321,15 +323,18 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     if let Some(row) = rows.next() {
         let row = row.unwrap();
 
-        Some(common::User {
-            attributes: get_list(&row.get::<_, String>(0)),
-            bot: row.get(1),
-            id: row.get::<_, i64>(2) as usize,
-            name: row.get(3),
-            nick: row.get(4)
-        })
+        Some(get_user_by_fields(&row))
     } else {
         None
+    }
+}
+fn get_user_by_fields(row: &SqlRow) -> common::User {
+    common::User {
+        attributes: get_list(&row.get::<_, String>(0)),
+        bot: row.get(1),
+        id: row.get::<_, i64>(2) as usize,
+        name: row.get(3),
+        nick: row.get(4)
     }
 }
 fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
@@ -426,7 +431,11 @@ fn get_message_by_fields(row: &SqlRow) -> common::Message {
     }
 }
 
-pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
+    attempt_or!(common::write(writer, &packet), {
+        eprintln!("Failed to send reply");
+    });
+}
 
 struct Session {
     id: Option<usize>,
@@ -562,15 +571,26 @@ fn handle_client(
                                         &[&login.bot, &login.name, &password, &token]
                                     ).unwrap();
                                     let id = db.last_insert_rowid() as usize;
-                                    reply = Some(Packet::LoginSuccess(common::LoginSuccess {
+                                    let mut sessions = sessions.borrow_mut();
+                                    let session = sessions.get_mut(&conn_id).unwrap();
+                                    session.id = Some(id);
+                                    write(&mut session.writer, Packet::LoginSuccess(common::LoginSuccess {
                                         created: true,
                                         id: id,
                                         token: token
                                     }));
-                                    sessions.borrow_mut()
-                                        .get_mut(&conn_id).unwrap()
-                                        .id = Some(id);
                                     send_init = true;
+
+                                    reply = Some(Packet::UserReceive(common::UserReceive {
+                                        inner: common::User {
+                                            attributes: Vec::new(),
+                                            bot: login.bot,
+                                            id: id,
+                                            name: login.name,
+                                            nick: None
+                                        }
+                                    }));
+                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
@@ -754,13 +774,17 @@ fn handle_client(
                                     ]).unwrap();
                                 };
 
+
+                                let mut sessions = sessions.borrow_mut();
+                                let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
+
                                 while let Some(row) = rows.next() {
                                     let msg = get_message_by_fields(&row.unwrap());
                                     let author = get_user(&db, msg.author).unwrap_or(common::User {
 										id: msg.author,
 										..Default::default()
 									});
-                                    let packet = Packet::MessageReceive(common::MessageReceive {
+                                    write(writer, Packet::MessageReceive(common::MessageReceive {
                                         author: author,
                                         channel: common::Channel {
 											id: msg.channel,
@@ -771,15 +795,7 @@ fn handle_client(
                                         text: msg.text,
                                         timestamp: msg.timestamp,
                                         timestamp_edit: msg.timestamp_edit
-                                    });
-
-                                    let mut sessions = sessions.borrow_mut();
-                                    let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
-
-                                    attempt_or!(common::write(writer, &packet), {
-                                        eprintln!("Failed to send reply");
-                                        break;
-                                    });
+                                    }));
                                 }
                                 break;
                             }
@@ -834,40 +850,44 @@ fn handle_client(
                         let mut sessions = sessions.borrow_mut();
                         let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
 
-                        attempt_or!(common::write(writer, &reply), {
-                            eprintln!("Failed to send reply");
-                        });
+                        write(writer, reply);
+                    }
+                    if send_init {
+                        let mut sessions = sessions.borrow_mut();
+                        let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
+                        {
+                            let mut stmt = db.prepare_cached("SELECT * FROM attributes").unwrap();
+                            let mut rows = stmt.query(&[]).unwrap();
 
-                        if send_init {
-                            {
-                                let mut stmt = db.prepare_cached("SELECT * FROM attributes").unwrap();
-                                let mut rows = stmt.query(&[]).unwrap();
+                            while let Some(row) = rows.next() {
+                                let row = row.unwrap();
 
-                                while let Some(row) = rows.next() {
-                                    let row = row.unwrap();
+                                write(writer, Packet::AttributeReceive(common::AttributeReceive {
+                                    inner: get_attribute_by_fields(&row),
+                                    new: false,
+                                }));
+                            }
+                        } {
+                            let mut stmt = db.prepare_cached("SELECT * FROM channels").unwrap();
+                            let mut rows = stmt.query(&[]).unwrap();
 
-                                    let packet = Packet::AttributeReceive(common::AttributeReceive {
-                                        inner: get_attribute_by_fields(&row),
-                                        new: false,
-                                    });
-                                    attempt_or!(common::write(writer, &packet), {
-                                        eprintln!("Failed to send channel to user");
-                                    });
-                                }
-                            } {
-                                let mut stmt = db.prepare_cached("SELECT * FROM channels").unwrap();
-                                let mut rows = stmt.query(&[]).unwrap();
+                            while let Some(row) = rows.next() {
+                                let row = row.unwrap();
 
-                                while let Some(row) = rows.next() {
-                                    let row = row.unwrap();
+                                write(writer, Packet::ChannelReceive(common::ChannelReceive {
+                                    inner: get_channel_by_fields(&row),
+                                }));
+                            }
+                        } {
+                            let mut stmt = db.prepare_cached("SELECT * FROM users").unwrap();
+                            let mut rows = stmt.query(&[]).unwrap();
 
-                                    let packet = Packet::ChannelReceive(common::ChannelReceive {
-                                        inner: get_channel_by_fields(&row),
-                                    });
-                                    attempt_or!(common::write(writer, &packet), {
-                                        eprintln!("Failed to send channel to user");
-                                    });
-                                }
+                            while let Some(row) = rows.next() {
+                                let row = row.unwrap();
+
+                                write(writer, Packet::UserReceive(common::UserReceive {
+                                    inner: get_user_by_fields(&row)
+                                }));
                             }
                         }
                     }

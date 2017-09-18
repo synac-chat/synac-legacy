@@ -136,6 +136,10 @@ pub struct LoginSuccess {
     pub token: String
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct UserReceive {
+    pub inner: User
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeReceive {
     pub inner: Attribute,
     pub new: bool
@@ -188,6 +192,7 @@ packet! {
     Command,
 
     LoginSuccess,
+    UserReceive,
     AttributeReceive,
     ChannelReceive,
     MessageReceive,

@@ -33,7 +33,20 @@ pub struct Session {
     channel: Option<usize>,
     channels: HashMap<usize, common::Channel>,
     id: usize,
-    stream: SslStream<TcpStream>
+    stream: SslStream<TcpStream>,
+    users: HashMap<usize, common::User>
+}
+impl Session {
+    pub fn new(id: usize, stream: SslStream<TcpStream>) -> Session {
+        Session {
+            attributes: HashMap::new(),
+            channel: None,
+            channels: HashMap::new(),
+            id: id,
+            stream: stream,
+            users: HashMap::new()
+        }
+    }
 }
 
 fn main() {
@@ -116,9 +129,12 @@ fn main() {
                                         }
                                         session.attributes.insert(event.inner.id, event.inner);
                                     },
+                                    Ok(Packet::UserReceive(event)) => {
+                                        session.users.insert(event.inner.id, event.inner);
+                                    },
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
                                         println!("{}It appears this channel was deleted", cursor::Restore);
-                                        sent_sender.send(()).unwrap();
+                                        to_terminal_bottom();
                                         flush!();
                                     },
                                     Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
@@ -258,7 +274,7 @@ fn main() {
                             &[&addr.to_string(), &public_key]
                         ).unwrap();
                     }
-                    let stream_ = match TcpStream::connect(addr) {
+                    let stream = match TcpStream::connect(addr) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!("Could not connect!");
@@ -266,7 +282,7 @@ fn main() {
                             continue;
                         }
                     };
-                    let mut stream_ = {
+                    let mut stream = {
                         let mut config = ssl.configure().expect("Failed to configure SSL connector");
                         config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
                             match cert.current_cert() {
@@ -290,7 +306,7 @@ fn main() {
                         });
 
                         match
-config.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(stream_)
+config.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(stream)
                         {
                             Ok(ok) => ok,
                             Err(_) => {
@@ -309,13 +325,13 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             token: Some(token.clone())
                         });
 
-                        if let Err(err) = common::write(&mut stream_, &packet) {
+                        if let Err(err) = common::write(&mut stream, &packet) {
                             println!("Could not request login");
                             println!("{}", err);
                             continue;
                         }
 
-                        match common::read(&mut stream_) {
+                        match common::read(&mut stream) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 id = Some(login.id);
                                 if login.created {
@@ -379,13 +395,13 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             token: None
                         });
 
-                        if let Err(err) = common::write(&mut stream_, &packet) {
+                        if let Err(err) = common::write(&mut stream, &packet) {
                             println!("Could not request login");
                             println!("{}", err);
                             continue;
                         }
 
-                        match common::read(&mut stream_) {
+                        match common::read(&mut stream) {
                             Ok(Packet::LoginSuccess(login)) => {
                                 db.execute(
                                     "UPDATE servers SET token = ? WHERE ip = ?",
@@ -430,14 +446,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             }
                         }
                     }
-                    stream_.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-                    *session = Some(Session {
-                        attributes: HashMap::new(),
-                        channel: None,
-                        channels: HashMap::new(),
-                        id: id.unwrap(),
-                        stream: stream_
-                    });
+                    stream.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
+                    *session = Some(Session::new(id.unwrap(), stream));
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -487,7 +497,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                 },
                 "list" => {
-                    usage!(1, "list <\"channels\"/\"attributes\">");
+                    usage!(1, "list <\"channels\"/\"attributes\"/\"users\">");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     match &*args[0] {
@@ -509,7 +519,18 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             // Read the above comment, thank you ---------------------------^
                             let mut attributes: Vec<_> = session.attributes.values().collect();
                             attributes.sort_by_key(|item| &item.pos);
-                            for attribute in attributes {
+                            for user in attributes {
+                                if !result.is_empty() { result.push_str(", "); }
+                                result.push_str(&user.name);
+                            }
+                            println!("{}", result);
+                        },
+                        "users" => {
+                            let mut result = String::new();
+                            // Read the above comment, thank you ---------------------------^
+                            let mut users: Vec<_> = session.users.values().collect();
+                            users.sort_by_key(|item| &item.name);
+                            for attribute in users {
                                 if !result.is_empty() { result.push_str(", "); }
                                 result.push_str(&attribute.name);
                             }
