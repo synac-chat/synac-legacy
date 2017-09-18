@@ -11,6 +11,8 @@ pub const LIMIT_ATTR_NAME:    usize = 128;
 pub const LIMIT_ATTR_AMOUNT:  usize = 2048;
 pub const LIMIT_MESSAGE:      usize = 16384;
 
+pub const LIMIT_MESSAGE_LIST: usize = 64;
+
 pub const ERR_LOGIN_INVALID: u8 = 0;
 pub const ERR_LOGIN_BANNED:  u8 = 1;
 pub const ERR_LOGIN_EMPTY:   u8 = 2;
@@ -26,7 +28,7 @@ pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 3;
 pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 4;
 
 // TYPES
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Attribute {
     pub allow: u8,
     pub deny: u8,
@@ -34,7 +36,7 @@ pub struct Attribute {
     pub name: String,
     pub pos: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct User {
     pub attributes: Vec<usize>,
     pub bot: bool,
@@ -42,14 +44,14 @@ pub struct User {
     pub name: String,
     pub nick: Option<String>
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Channel {
     pub allow: Vec<usize>,
     pub deny:  Vec<usize>,
     pub id: usize,
     pub name: String
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Message {
     pub author: usize,
     pub channel: usize,
@@ -60,94 +62,98 @@ pub struct Message {
 }
 
 // CLIENT PACKETS
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Login {
     pub bot: bool,
     pub name: String,
     pub password: Option<String>,
     pub token: Option<String>
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeCreate {
     pub allow: u8,
     pub deny: u8,
     pub name: String,
     pub pos: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeUpdate {
     pub inner: Attribute
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeDelete {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelCreate {
     pub allow: Vec<usize>,
     pub deny:  Vec<usize>,
     pub name: String
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelUpdate {
     pub inner: Channel
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelDelete {
     pub channel: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageList {
-    pub around: Option<usize>
+    pub after: Option<usize>,
+    pub before: Option<usize>,
+    pub channel: usize,
+    pub limit: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageCreate {
     pub channel: usize,
     pub text: Vec<u8>
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageUpdate {
     pub id: usize,
     pub text: Vec<u8>
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageDelete {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Command {
     pub author: usize,
     pub parts: Vec<String>,
     pub recipient: usize
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Close {}
 
 // SERVER PACKETS
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct LoginSuccess {
     pub created: bool,
     pub id: usize,
     pub token: String
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeReceive {
     pub inner: Attribute
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelReceive {
     pub inner: Channel
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageReceive {
     pub author: User,
     pub channel: Channel,
     pub id: usize,
+    pub new: bool,
     pub text: Vec<u8>,
     pub timestamp: i64,
     pub timestamp_edit: Option<i64>
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct CommandReceive {
     pub args: Vec<String>,
     pub author: User,

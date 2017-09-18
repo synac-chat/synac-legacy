@@ -99,7 +99,7 @@ fn main() {
                                         if session.channel == Some(msg.channel.id) {
                                             println!("{}{}: {}", cursor::Restore, msg.author.name,
                                                      String::from_utf8_lossy(&msg.text));
-                                            if msg.author.id == session.id {
+                                            if msg.new && msg.author.id == session.id {
                                                 sent_sender.send(()).unwrap();
                                             } else {
                                                 to_terminal_bottom();
@@ -146,8 +146,8 @@ fn main() {
                     Err(_) => {}
                 }
             }
-            // thread::sleep(Duration::from_secs(1));
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(1));
+            // thread::sleep(Duration::from_millis(250));
         }
     });
 
@@ -569,7 +569,17 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     for channel in session.channels.values() {
                         if channel.name == name {
                             session.channel = Some(channel.id);
-                            println!("Joined channel #{}", channel.name);
+                            println!("{}{}Joined channel #{}", termion::clear::All, cursor::Goto(1, 1), channel.name);
+                            let packet = Packet::MessageList(common::MessageList {
+                                after: None,
+                                before: None,
+                                channel: channel.id,
+                                limit: common::LIMIT_MESSAGE_LIST
+                            });
+                            if let Err(err) = common::write(&mut session.stream, &packet) {
+                                println!("Failed to send message_list packet");
+                                println!("{}", err);
+                            }
                             found = true;
                             break;
                         }

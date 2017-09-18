@@ -327,10 +327,14 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
     }
 }
 fn get_attributes_combined(db: &SqlConnection, ids: &[usize]) -> u8 {
-    let mut query = String::with_capacity(40);
+    if ids.is_empty() {
+        return 0;
+    }
+
+    let mut query = String::with_capacity(48+1+14);
     query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
     query.push_str(&to_list(ids));
-    query.push_str(")");
+    query.push_str(") ORDER BY pos");
     let mut stmt = db.prepare(&query).unwrap();
     let rows = stmt.query_map(&[], |row| (row.get(0), row.get(1))).unwrap();
     let mut rows = rows.map(|row| row.unwrap());
@@ -373,20 +377,20 @@ fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
-        get_message_by_fields(&row)
+        Some(get_message_by_fields(&row))
     } else {
         None
     }
 }
-fn get_message_by_fields(row: &SqlRow) -> Option<common::Message> {
-    Some(common::Message {
+fn get_message_by_fields(row: &SqlRow) -> common::Message {
+    common::Message {
         author: row.get::<_, i64>(0) as usize,
         channel: row.get::<_, i64>(1) as usize,
         id: row.get::<_, i64>(2) as usize,
         text: row.get(3),
         timestamp: row.get(4),
         timestamp_edit: row.get(5)
-    })
+    }
 }
 
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -548,20 +552,30 @@ fn handle_client(
                                 let id = get_id!();
                                 let user = get_user(&db, id).unwrap();
 
-                                db.execute(
-                                    "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
-                                    &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
-                                ).unwrap();
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    get_attributes_combined(&db, &user.attributes),
+                                    common::PERM_WRITE
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
+                                        &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
+                                    ).unwrap();
 
-                                reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                    author: user,
-                                    channel: channel,
-                                    id: db.last_insert_rowid() as usize,
-                                    text: msg.text,
-                                    timestamp: timestamp,
-                                    timestamp_edit: None
-                                }));
-                                broadcast = true;
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        author: user,
+                                        channel: channel,
+                                        id: db.last_insert_rowid() as usize,
+                                        new: true,
+                                        text: msg.text,
+                                        timestamp: timestamp,
+                                        timestamp_edit: None
+                                    }));
+                                    broadcast = true;
+                                }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
                             }
@@ -604,31 +618,125 @@ fn handle_client(
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                let _ = get_id!();
-                                let count: i32 = db.query_row(
-                                    "SELECT COUNT(*) FROM attributes",
-                                    &[],
-                                    |row| row.get(0)
-                                ).unwrap();
-
-                                if count as usize > config.limit_attribute_amount_max {
-                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                let id = get_id!();
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    common::PERM_MANAGE_ATTRIBUTES
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    db.execute(
-                                        "INSERT INTO attributes (allow, deny, name, pos) VALUES (?, ?, ?, ?)",
-                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64)]
+                                    let count: i32 = db.query_row(
+                                        "SELECT COUNT(*) FROM attributes",
+                                        &[],
+                                        |row| row.get(0)
                                     ).unwrap();
 
-                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
-                                        inner: common::Attribute {
-                                            allow: attr.allow,
-                                            deny: attr.deny,
-                                            id: db.last_insert_rowid() as usize,
-                                            name: attr.name,
-                                            pos: attr.pos
-                                        }
-                                    }));
+                                    if count as usize > config.limit_attribute_amount_max {
+                                        reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                    } else {
+                                        db.execute(
+                                            "INSERT INTO attributes (allow, deny, name, pos) VALUES (?, ?, ?, ?)",
+                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64)]
+                                        ).unwrap();
+
+                                        reply = Some(Packet::AttributeReceive(common::AttributeReceive {
+                                            inner: common::Attribute {
+                                                allow: attr.allow,
+                                                deny: attr.deny,
+                                                id: db.last_insert_rowid() as usize,
+                                                name: attr.name,
+                                                pos: attr.pos
+                                            }
+                                        }));
+                                    }
                                 }
+                            }
+                        },
+                        Packet::MessageList(params) => {
+                            // Cheap trick to break out at any time.
+                            let id = get_id!();
+                            loop {
+                                let mut stmt;
+                                let mut rows;
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    get_attributes_combined_by_user(&db, id).unwrap(),
+                                    common::PERM_READ
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                    break;
+                                } else if params.limit > common::LIMIT_MESSAGE_LIST {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                    break;
+                                } else if let Some(after) = params.after {
+                                    stmt = db.prepare(
+                                        "SELECT * FROM messages
+                                        WHERE channel = ? AND timestamp >=
+                                        (SELECT timestamp FROM messages WHERE id = ?)
+                                        ORDER BY timestamp
+                                        LIMIT ?",
+                                    ).unwrap();
+                                    rows = stmt.query(&[
+                                        &(params.channel as i64),
+                                        &(after as i64),
+                                        &(params.limit as i64)
+                                    ]).unwrap();
+                                } else if let Some(before) = params.before {
+                                    stmt = db.prepare(
+                                        "SELECT * FROM messages
+                                        WHERE channel = ? AND timestamp <=
+                                        (SELECT timestamp FROM messages WHERE id = ?)
+                                        ORDER BY timestamp
+                                        LIMIT ?",
+                                    ).unwrap();
+                                    rows = stmt.query(&[
+                                        &(params.channel as i64),
+                                        &(before as i64),
+                                        &(params.limit as i64)
+                                    ]).unwrap();
+                                } else {
+                                    stmt = db.prepare(
+                                        "SELECT * FROM
+                                        (SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?)
+                                        ORDER BY timestamp",
+                                    ).unwrap();
+                                    rows = stmt.query(&[
+                                        &(params.channel as i64),
+                                        &(params.limit as i64)
+                                    ]).unwrap();
+                                };
+
+                                while let Some(row) = rows.next() {
+                                    let msg = get_message_by_fields(&row.unwrap());
+                                    let author = get_user(&db, msg.author).unwrap_or(common::User {
+										id: msg.author,
+										..Default::default()
+									});
+                                    let packet = Packet::MessageReceive(common::MessageReceive {
+                                        author: author,
+                                        channel: common::Channel {
+											id: msg.channel,
+											..Default::default()
+										},
+                                        id: msg.id,
+                                        new: false,
+                                        text: msg.text,
+                                        timestamp: msg.timestamp,
+                                        timestamp_edit: msg.timestamp_edit
+                                    });
+
+                                    let mut sessions = sessions.borrow_mut();
+                                    let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
+
+                                    attempt_or!(common::write(writer, &packet), {
+                                        eprintln!("Failed to send reply");
+                                        break;
+                                    });
+                                }
+                                break;
                             }
                         },
                         _ => unimplemented!()
