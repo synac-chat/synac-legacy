@@ -627,15 +627,21 @@ fn handle_client(
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    let count: i32 = db.query_row(
-                                        "SELECT COUNT(*) FROM attributes",
+                                    let (count, min, max): (i32, i32, i32) = db.query_row(
+                                        "SELECT COUNT(*), MIN(pos), MAX(pos) FROM attributes",
                                         &[],
-                                        |row| row.get(0)
+                                        |row| (row.get(0), row.get(1), row.get(2))
                                     ).unwrap();
 
                                     if count as usize > config.limit_attribute_amount_max {
                                         reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                    } else if attr.pos < min as usize || attr.pos > max as usize + 1 {
+                                        reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
                                     } else {
+                                        db.execute(
+                                            "UPDATE attributes SET pos = pos + 1 WHERE pos >= ?",
+                                            &[&(attr.pos as i64)]
+                                        ).unwrap();
                                         db.execute(
                                             "INSERT INTO attributes (allow, deny, name, pos) VALUES (?, ?, ?, ?)",
                                             &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64)]
@@ -648,7 +654,8 @@ fn handle_client(
                                                 id: db.last_insert_rowid() as usize,
                                                 name: attr.name,
                                                 pos: attr.pos
-                                            }
+                                            },
+                                            new: true
                                         }));
                                     }
                                 }
@@ -803,6 +810,7 @@ fn handle_client(
 
                                     let packet = Packet::AttributeReceive(common::AttributeReceive {
                                         inner: get_attribute_by_fields(&row),
+                                        new: false,
                                     });
                                     attempt_or!(common::write(writer, &packet), {
                                         eprintln!("Failed to send channel to user");

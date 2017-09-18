@@ -20,6 +20,7 @@ pub const ERR_LOGIN_BOT:     u8 = 3;
 pub const ERR_UNKNOWN_CHANNEL: u8 = 4;
 pub const ERR_LIMIT_REACHED: u8 = 5;
 pub const ERR_MISSING_PERMISSION: u8 = 6;
+pub const ERR_ATTR_INVALID_POS: u8 = 7;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;
@@ -137,7 +138,8 @@ pub struct LoginSuccess {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeReceive {
-    pub inner: Attribute
+    pub inner: Attribute,
+    pub new: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelReceive {

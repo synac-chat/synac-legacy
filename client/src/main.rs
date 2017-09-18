@@ -111,20 +111,32 @@ fn main() {
                                         session.channels.insert(event.inner.id, event.inner);
                                     },
                                     Ok(Packet::AttributeReceive(event)) => {
+                                        if event.new {
+                                            for attr in session.attributes.values_mut() {
+                                                if attr.pos >= event.inner.pos {
+                                                    attr.pos += 1;
+                                                }
+                                            }
+                                        }
                                         session.attributes.insert(event.inner.id, event.inner);
                                     },
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
-                                        println!("{}It appears this channel was deleted.", cursor::Restore);
+                                        println!("{}It appears this channel was deleted", cursor::Restore);
                                         sent_sender.send(()).unwrap();
                                         flush!();
                                     },
                                     Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
-                                        println!("{}Too short or too long. No idea which.", cursor::Restore);
+                                        println!("{}Too short or too long. No idea which", cursor::Restore);
                                         to_terminal_bottom();
                                         flush!();
                                     },
                                     Ok(Packet::Err(common::ERR_MISSING_PERMISSION)) => {
-                                        println!("{}Missing permission!", cursor::Restore);
+                                        println!("{}Missing permission", cursor::Restore);
+                                        to_terminal_bottom();
+                                        flush!();
+                                    },
+                                    Ok(Packet::Err(common::ERR_ATTR_INVALID_POS)) => {
+                                        println!("{}Invalid attribute position", cursor::Restore);
                                         to_terminal_bottom();
                                         flush!();
                                     },
@@ -207,7 +219,7 @@ fn main() {
                     usage!(1, "connect <ip[:port]>");
                     let mut session = session.lock().unwrap();
                     if session.is_some() {
-                        println!("Please disconnect first.");
+                        println!("Please disconnect first");
                         continue;
                     }
 
@@ -324,7 +336,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account.");
+                                    println!("This account is a bot account");
                                     continue;
                                 },
                                 common::ERR_LIMIT_REACHED => {
@@ -398,7 +410,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                     continue;
                                 },
                                 common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account.");
+                                    println!("This account is a bot account");
                                     continue;
                                 },
                                 common::ERR_LIMIT_REACHED => {
@@ -467,7 +479,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 allow: 0,
                                 deny: 0,
                                 name: args.remove(1),
-                                pos: session.attributes.len()
+                                pos: 1,
+                                // pos: session.attributes.len()
                             })
                         },
                         _ => { println!("Can't create that"); continue; }
@@ -499,7 +512,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             let mut result = String::new();
                             // Read the above comment, thank you ---------------------------^
                             let mut attributes: Vec<_> = session.attributes.values().collect();
-                            attributes.sort_by_key(|item| &item.name);
+                            attributes.sort_by_key(|item| &item.pos);
                             for attribute in attributes {
                                 if !result.is_empty() { result.push_str(", "); }
                                 result.push_str(&attribute.name);
@@ -524,7 +537,6 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     for channel in session.channels.values() {
                         if name == channel.name || Ok(channel.id) == id {
                             println!("Channel #{}", channel.name);
-                            println!("ID: #{}", channel.id);
                             let mut allowed = String::new();
                             for id in &channel.allow {
                                 for attribute in session.attributes.values() {
@@ -545,14 +557,16 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 }
                             }
                             println!("Denied attributes: {}", denied);
+                            println!("ID: #{}", channel.id);
                         }
                     }
                     for attribute in session.attributes.values() {
                         if name == attribute.name || Ok(attribute.id) == id {
                             println!("Attribute {}", attribute.name);
-                            println!("ID: #{}", attribute.id);
                             println!("Allow bitmask: {}", attribute.allow);
                             println!("Deny bitmask: {}", attribute.deny);
+                            println!("ID: #{}", attribute.id);
+                            println!("Position: {}", attribute.pos);
                         }
                     }
                 },
