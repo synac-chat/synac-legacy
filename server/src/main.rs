@@ -86,7 +86,7 @@ fn main() {
                     pos     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@everyone', 0)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@humans', 0)", &[]).unwrap();
     db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',     0)", &[]).unwrap();
     db.execute("CREATE TABLE IF NOT EXISTS channels (
                     overrides   TEXT NOT NULL DEFAULT '',
