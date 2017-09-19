@@ -201,6 +201,22 @@ fn main() {
             }
             let command = args.remove(0);
 
+            macro_rules! usage_min {
+                ($amount:expr, $usage:expr) => {
+                    if args.len() < $amount {
+                        println!(concat!("Usage: /", $usage));
+                        continue;
+                    }
+                }
+            }
+            macro_rules! usage_max {
+                ($amount:expr, $usage:expr) => {
+                    if args.len() > $amount {
+                        println!(concat!("Usage: /", $usage));
+                        continue;
+                    }
+                }
+            }
             macro_rules! usage {
                 ($amount:expr, $usage:expr) => {
                     if args.len() != $amount {
@@ -470,20 +486,26 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 "create" => {
-                    usage!(2, "create <\"channel\"/\"attribute\"> <name>");
+                    usage_min!(2, "create <\"channel\"/\"attribute\"> <name> [data]");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let packet = match &*args[0] {
                         "channel" => {
+                            usage_max!(2, "create <\"channel\"/\"attribute\"> <name> [data]");
                             Packet::ChannelCreate(common::ChannelCreate {
                                 overrides: Vec::new(),
                                 name: args.remove(1)
                             })
                         },
                         "attribute" => {
+                            usage_max!(3, "create <\"channel\"/\"attribute\"> <name> [data]");
+                            let (mut allow, mut deny) = (0, 0);
+                            if args.len() == 3 {
+                                from_perm_string(&*args[2], &mut allow, &mut deny);
+                            }
                             Packet::AttributeCreate(common::AttributeCreate {
-                                allow: 0,
-                                deny: 0,
+                                allow: allow,
+                                deny: deny,
                                 name: args.remove(1),
                                 pos: 1,
                                 // pos: session.attributes.len()
@@ -527,7 +549,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                         },
                         "users" => {
                             let mut result = String::new();
-                            // Read the above comment, thank you ---------------------------^
+                            // something something above comment
                             let mut users: Vec<_> = session.users.values().collect();
                             users.sort_by_key(|item| &item.name);
                             for banned in &[false, true] {
@@ -566,8 +588,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     for attribute in session.attributes.values() {
                         if name == attribute.name || Ok(attribute.id) == id {
                             println!("Attribute {}", attribute.name);
-                            println!("Allow bitmask: {}", attribute.allow);
-                            println!("Deny bitmask: {}", attribute.deny);
+                            println!("Permission: {}", to_perm_string(attribute.allow, attribute.deny));
                             println!("ID: #{}", attribute.id);
                             println!("Position: {}", attribute.pos);
                         }
@@ -651,6 +672,64 @@ fn to_terminal_bottom() {
         },
         Err(_) => {}
     }
+}
+
+fn to_perm_string(allow: u8, deny: u8) -> String {
+    let mut result = String::with_capacity(10);
+
+    if allow != 0 {
+        result.push('+');
+        result.push_str(&to_single_perm_string(allow));
+    }
+    if deny != 0 {
+        result.push('-');
+        result.push_str(&to_single_perm_string(deny));
+    }
+
+    result.shrink_to_fit();
+    result
+}
+fn to_single_perm_string(bitmask: u8) -> String {
+    let mut result = String::with_capacity(4);
+
+    if bitmask & common::PERM_READ == common::PERM_READ {
+        result.push('r');
+    }
+    if bitmask & common::PERM_WRITE == common::PERM_WRITE {
+        result.push('w');
+    }
+    if bitmask & common::PERM_MANAGE_CHANNELS == common::PERM_MANAGE_CHANNELS {
+        result.push('c');
+    }
+    if bitmask & common::PERM_MANAGE_ATTRIBUTES == common::PERM_MANAGE_ATTRIBUTES {
+        result.push('a');
+    }
+
+    result
+}
+fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
+    let mut mode = '+';
+
+    for c in input.chars() {
+        if c == '+' || c == '-' || c == '=' {
+            mode = c;
+        }
+        let perm = match c {
+            'r' => common::PERM_READ,
+            'w' => common::PERM_WRITE,
+            'c' => common::PERM_MANAGE_CHANNELS,
+            'a' => common::PERM_MANAGE_ATTRIBUTES,
+            _   => return false
+        };
+        match mode {
+            '+' => *allow |= perm,
+            '-' => *deny |= perm,
+            '=' => { *allow &= !perm; *deny &= !perm }
+            _   => unreachable!()
+        }
+    }
+
+    true
 }
 
 fn parse_ip(input: &str) -> Option<SocketAddr> {
