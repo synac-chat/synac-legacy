@@ -33,6 +33,7 @@ pub struct Session {
     channel: Option<usize>,
     channels: HashMap<usize, common::Channel>,
     id: usize,
+    last: Option<(usize, Vec<u8>)>,
     stream: SslStream<TcpStream>,
     users: HashMap<usize, common::User>
 }
@@ -43,6 +44,7 @@ impl Session {
             channel: None,
             channels: HashMap::new(),
             id: id,
+            last: None,
             stream: stream,
             users: HashMap::new()
         }
@@ -108,14 +110,6 @@ fn main() {
                                 i = 0;
                             } else {
                                 match common::deserialize(&buf) {
-                                    Ok(Packet::MessageReceive(msg)) => {
-                                        if session.channel == Some(msg.channel.id) {
-                                            println!("{}\r{}: {}", cursor::Restore, msg.author.name,
-                                                     String::from_utf8_lossy(&msg.text));
-                                            to_terminal_bottom();
-                                            flush!();
-                                        }
-                                    },
                                     Ok(Packet::ChannelReceive(event)) => {
                                         session.channels.insert(event.inner.id, event.inner);
                                     },
@@ -161,6 +155,22 @@ fn main() {
                                     },
                                     Ok(Packet::UserReceive(event)) => {
                                         session.users.insert(event.inner.id, event.inner);
+                                    },
+                                    Ok(Packet::MessageReceive(msg)) => {
+                                        if session.channel == Some(msg.channel.id) {
+                                            println!("{}\r{} (ID #{}): {}", cursor::Restore, msg.author.name, msg.id,
+                                                     String::from_utf8_lossy(&msg.text));
+                                            to_terminal_bottom();
+                                            flush!();
+                                        }
+                                        if msg.author.id == session.id {
+                                            session.last = Some((msg.id, msg.text));
+                                        }
+                                    },
+                                    Ok(Packet::MessageDeleteReceive(event)) => {
+                                        println!("{}Deleted message: {}", cursor::Restore, event.id);
+                                        to_terminal_bottom();
+                                        flush!();
                                     },
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
                                         println!("{}It appears this channel was deleted", cursor::Restore);
@@ -693,7 +703,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                 },
                 "delete" => {
-                    usage!(2, "delete <\"attribute\"/\"channel\"> <name>");
+                    usage!(2, "delete <\"attribute\"/\"channel\"> <name> OR delete message <id>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
@@ -722,13 +732,19 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 }
                             }
                         },
+                        "message" => packet = Some(Packet::MessageDelete(common::MessageDelete {
+                            id: match name.parse() {
+                                Ok(ok) => ok,
+                                Err(_) => { println!("That's not an ID"); continue; }
+                            }
+                        })),
                         _ => {
                             println!("Can't delete that");
                             continue;
                         }
                     }
                     match packet {
-                        None => println!("Nothing found with that name"),
+                        None => println!("Nothing found with that name/id"),
                         Some(packet) => {
                             if let Err(err) = common::write(&mut session.stream, &packet) {
                                 println!("Oh no could not delete");
@@ -751,12 +767,29 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             },
             Some(ref mut session) => {
                 if let Some(channel) = session.channel {
-                    print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
-                    flush!();
-                    let packet = Packet::MessageCreate(common::MessageCreate {
-                        channel: channel,
-                        text: input.into_bytes()
-                    });
+                    let packet = if input.starts_with("s/") && session.last.is_some() {
+                        let mut parts = input[2..].splitn(2, '/');
+                        let find = match parts.next() {
+                            Some(some) => some,
+                            None => continue
+                        };
+                        let replace = match parts.next() {
+                            Some(some) => some,
+                            None => continue
+                        };
+                        let last = session.last.as_ref().unwrap();
+                        Packet::MessageUpdate(common::MessageUpdate {
+                            id: last.0,
+                            text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
+                        })
+                    } else {
+                        print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
+                        flush!();
+                        Packet::MessageCreate(common::MessageCreate {
+                            channel: channel,
+                            text: input.into_bytes()
+                        })
+                    };
 
                     if let Err(err) = common::write(&mut session.stream, &packet) {
                         println!("\rFailed to deliver message");

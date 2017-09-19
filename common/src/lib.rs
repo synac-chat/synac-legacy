@@ -27,8 +27,9 @@ pub const ERR_ATTR_INVALID_POS: u8 = 9;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;
-pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 2;
-pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 3;
+pub const PERM_MANAGE_MESSAGES:   u8 = 1 << 2;
+pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 3;
+pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 4;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug, Default)]

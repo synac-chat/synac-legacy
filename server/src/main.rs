@@ -622,154 +622,6 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
                             }
                         },
-                        Packet::MessageCreate(msg) => {
-                            if msg.text.len() < config.limit_message_min
-                                || msg.text.len() > config.limit_message_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if let Some(channel) = get_channel(&db, msg.channel) {
-                                let timestamp = Utc::now().timestamp();
-                                let id = get_id!();
-                                let user = get_user(&db, id).unwrap();
-
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
-                                    common::PERM_WRITE
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    db.execute(
-                                        "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
-                                        &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
-                                    ).unwrap();
-
-                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        author: user,
-                                        channel: channel,
-                                        id: db.last_insert_rowid() as usize,
-                                        new: true,
-                                        text: msg.text,
-                                        timestamp: timestamp,
-                                        timestamp_edit: None
-                                    }));
-                                    broadcast = true;
-                                }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
-                            }
-                        },
-                        Packet::ChannelCreate(mut channel) => {
-                            if channel.name.len() < config.limit_channel_name_min
-                                || channel.name.len() > config.limit_channel_name_max
-                                || channel.overrides.len() > config.limit_attribute_amount_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else {
-                                let id = get_id!();
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                    common::PERM_MANAGE_CHANNELS
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    {
-                                        let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
-                                            .unwrap();
-                                        channel.overrides.retain(|&(id, _)| {
-                                            let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
-                                            count >= 1
-                                        });
-                                    }
-                                    db.execute(
-                                        "INSERT INTO channels (overrides, name) VALUES (?, ?)",
-                                        &[
-                                            &from_list(&from_map(&channel.overrides)),
-                                            &channel.name
-                                        ]
-                                    ).unwrap();
-
-                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                        inner: common::Channel {
-                                            overrides:  channel.overrides,
-                                            id: db.last_insert_rowid() as usize,
-                                            name: channel.name
-                                        }
-                                    }));
-                                    broadcast = true;
-                                }
-                            }
-                        },
-                        Packet::ChannelUpdate(event) => {
-                            let mut channel = event.inner;
-                            if channel.name.len() < config.limit_channel_name_min
-                                || channel.name.len() > config.limit_channel_name_max
-                                || channel.overrides.len() > config.limit_attribute_amount_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else {
-                                let id = get_id!();
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                    common::PERM_MANAGE_CHANNELS
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else if let Some(_) = get_channel(&db, channel.id) {
-                                    {
-                                        let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
-                                            .unwrap();
-                                        channel.overrides.retain(|&(id, _)| {
-                                            let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
-                                            count >= 1
-                                        });
-                                    }
-                                    db.execute(
-                                        "UPDATE channels SET overrides = ?, name = ? WHERE id = ?",
-                                        &[
-                                            &from_list(&from_map(&channel.overrides)),
-                                            &channel.name,
-                                            &(channel.id as i64)
-                                        ]
-                                    ).unwrap();
-
-                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                        inner: common::Channel {
-                                            overrides:  channel.overrides,
-                                            id: db.last_insert_rowid() as usize,
-                                            name: channel.name
-                                        }
-                                    }));
-                                    broadcast = true;
-                                }
-                            }
-                        },
-                        Packet::ChannelDelete(event) => {
-                            let id = get_id!();
-                            if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                common::PERM_MANAGE_CHANNELS
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                            } else if let Some(channel) = get_channel(&db, event.id) {
-                                db.execute("DELETE FROM messages WHERE channel = ?", &[&(event.id as i64)]).unwrap();
-                                db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
-
-                                reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
-                                    inner: common::Channel {
-                                        id: channel.id,
-                                        name: channel.name,
-                                        overrides: channel.overrides
-                                    }
-                                }));
-                                broadcast = true;
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
-                            }
-                        },
                         Packet::AttributeCreate(attr) => {
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
@@ -911,6 +763,121 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE));
                             }
                         },
+                        Packet::ChannelCreate(mut channel) => {
+                            if channel.name.len() < config.limit_channel_name_min
+                                || channel.name.len() > config.limit_channel_name_max
+                                || channel.overrides.len() > config.limit_attribute_amount_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                let id = get_id!();
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    {
+                                        let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
+                                            .unwrap();
+                                        channel.overrides.retain(|&(id, _)| {
+                                            let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
+                                            count >= 1
+                                        });
+                                    }
+                                    db.execute(
+                                        "INSERT INTO channels (overrides, name) VALUES (?, ?)",
+                                        &[
+                                            &from_list(&from_map(&channel.overrides)),
+                                            &channel.name
+                                        ]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                        inner: common::Channel {
+                                            overrides:  channel.overrides,
+                                            id: db.last_insert_rowid() as usize,
+                                            name: channel.name
+                                        }
+                                    }));
+                                    broadcast = true;
+                                }
+                            }
+                        },
+                        Packet::ChannelUpdate(event) => {
+                            let mut channel = event.inner;
+                            if channel.name.len() < config.limit_channel_name_min
+                                || channel.name.len() > config.limit_channel_name_max
+                                || channel.overrides.len() > config.limit_attribute_amount_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                let id = get_id!();
+                                if let Some(old) = get_channel(&db, channel.id) {
+                                    if !has_perm(
+                                        &config,
+                                        id,
+                                        calculate_permissions_by_user(&db, id, &old.overrides).unwrap(),
+                                        common::PERM_MANAGE_CHANNELS
+                                    ) {
+                                        reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                    } else {
+                                        {
+                                            let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
+                                                .unwrap();
+                                            channel.overrides.retain(|&(id, _)| {
+                                                let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
+                                                count >= 1
+                                            });
+                                        }
+                                        db.execute(
+                                            "UPDATE channels SET overrides = ?, name = ? WHERE id = ?",
+                                            &[
+                                                &from_list(&from_map(&channel.overrides)),
+                                                &channel.name,
+                                                &(channel.id as i64)
+                                            ]
+                                        ).unwrap();
+
+                                        reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                            inner: common::Channel {
+                                                overrides:  channel.overrides,
+                                                id: db.last_insert_rowid() as usize,
+                                                name: channel.name
+                                            }
+                                        }));
+                                        broadcast = true;
+                                    }
+                                }
+                            }
+                        },
+                        Packet::ChannelDelete(event) => {
+                            let id = get_id!();
+                            if let Some(channel) = get_channel(&db, event.id) {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, &channel.overrides).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute("DELETE FROM messages WHERE channel = ?", &[&(event.id as i64)]).unwrap();
+                                    db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
+
+                                    reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
+                                        inner: common::Channel {
+                                            id: channel.id,
+                                            name: channel.name,
+                                            overrides: channel.overrides
+                                        }
+                                    }));
+                                    broadcast = true;
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
                         Packet::MessageList(params) => {
                             // Cheap trick to break out at any time.
                             let id = get_id!();
@@ -977,15 +944,15 @@ fn handle_client(
                                 while let Some(row) = rows.next() {
                                     let msg = get_message_by_fields(&row.unwrap());
                                     let author = get_user(&db, msg.author).unwrap_or(common::User {
-										id: msg.author,
-										..Default::default()
-									});
+                                        id: msg.author,
+                                        ..Default::default()
+                                    });
                                     write(writer, Packet::MessageReceive(common::MessageReceive {
                                         author: author,
                                         channel: common::Channel {
-											id: msg.channel,
-											..Default::default()
-										},
+                                            id: msg.channel,
+                                            ..Default::default()
+                                        },
                                         id: msg.id,
                                         new: false,
                                         text: msg.text,
@@ -994,6 +961,105 @@ fn handle_client(
                                     }));
                                 }
                                 break;
+                            }
+                        },
+                        Packet::MessageCreate(msg) => {
+                            if msg.text.len() < config.limit_message_min
+                                || msg.text.len() > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(channel) = get_channel(&db, msg.channel) {
+                                let timestamp = Utc::now().timestamp();
+                                let id = get_id!();
+                                let user = get_user(&db, id).unwrap();
+
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
+                                    common::PERM_WRITE
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
+                                        &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        author: user,
+                                        channel: channel,
+                                        id: db.last_insert_rowid() as usize,
+                                        new: true,
+                                        text: msg.text,
+                                        timestamp: timestamp,
+                                        timestamp_edit: None
+                                    }));
+                                    broadcast = true;
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
+                        Packet::MessageUpdate(event) => {
+                            if event.text.len() < config.limit_message_min
+                                || event.text.len() > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(msg) = get_message(&db, event.id) {
+                                let timestamp = Utc::now().timestamp();
+                                let id = get_id!();
+
+                                if msg.author != id {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    let channel = get_channel(&db, id).unwrap();
+                                    let user = get_user(&db, id).unwrap();
+
+                                    db.execute(
+                                        "UPDATE messages SET text = ? WHERE id = ?",
+                                        &[&event.text, &(event.id as i64)]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        author: user,
+                                        channel: channel,
+                                        id: event.id,
+                                        new: true,
+                                        text: event.text,
+                                        timestamp: msg.timestamp,
+                                        timestamp_edit: Some(timestamp)
+                                    }));
+                                    broadcast = true;
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
+                            }
+                        },
+                        Packet::MessageDelete(event) => {
+                            if let Some(msg) = get_message(&db, event.id) {
+                                let id = get_id!();
+                                let user = get_user(&db, id).unwrap();
+                                let channel = get_channel(&db, id).unwrap();
+
+                                if msg.author != id && !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
+                                    common::PERM_MANAGE_MESSAGES
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "DELETE FROM messages WHERE id = ?",
+                                        &[&(event.id as i64)]
+                                    ).unwrap();
+
+                                    reply = Some(Packet::MessageDeleteReceive(common::MessageDeleteReceive {
+                                        id: event.id
+                                    }));
+                                    broadcast = true;
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
                         _ => unimplemented!()
