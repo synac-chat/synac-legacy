@@ -41,6 +41,7 @@ pub struct Attribute {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct User {
     pub attributes: Vec<usize>,
+    pub ban: bool,
     pub bot: bool,
     pub id: usize,
     pub name: String,

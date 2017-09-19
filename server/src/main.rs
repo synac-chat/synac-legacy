@@ -66,12 +66,25 @@ fn main() {
     });
     db.execute("CREATE TABLE IF NOT EXISTS users (
                     attributes  TEXT NOT NULL DEFAULT '',
+                    ban         INTEGER NOT NULL DEFAULT 0,
                     bot         INTEGER NOT NULL,
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     name        TEXT NOT NULL,
                     nick        TEXT,
                     password    TEXT NOT NULL,
                     token       TEXT NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS bans (
+                    ip  TEXT NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS attributes (
+                    allow   INTEGER NOT NULL,
+                    deny    INTEGER NOT NULL,
+                    id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    name    TEXT NOT NULL,
+                    pos     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS channels (
@@ -87,14 +100,6 @@ fn main() {
                     text        BLOB NOT NULL,
                     timestamp   INTEGER NOT NULL,
                     timestamp_edit  INTEGER
-                )", &[])
-        .expect("SQLite table creation failed");
-    db.execute("CREATE TABLE IF NOT EXISTS attributes (
-                    allow   INTEGER NOT NULL,
-                    deny    INTEGER NOT NULL,
-                    id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    name    TEXT NOT NULL,
-                    pos     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
 
@@ -223,7 +228,7 @@ fn main() {
 
     println!("I'm alive!");
 
-    let server = listener.incoming().for_each(|(conn, _)| {
+    let server = listener.incoming().for_each(|(conn, addr)| {
         use tokio_io::AsyncRead;
 
         let config_clone = config.clone();
@@ -235,7 +240,21 @@ fn main() {
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
             let (reader, writer) = conn.split();
             let reader = BufReader::new(reader);
-            let writer = BufWriter::new(writer);
+            let mut writer = BufWriter::new(writer);
+
+            {
+                let mut stmt = db_clone.prepare_cached("SELECT ip FROM bans").unwrap();
+                let mut rows = stmt.query(&[]).unwrap();
+
+                while let Some(row) = rows.next() {
+                    let ban = row.unwrap().get::<_, String>(0).parse();
+
+                    if Ok(addr.ip()) == ban {
+                        write(&mut writer, Packet::Err(common::ERR_LOGIN_BANNED));
+                        return Ok(());
+                    }
+                }
+            }
 
             let my_conn_id = *conn_id_clone.borrow();
             *conn_id_clone.borrow_mut() += 1;
@@ -331,10 +350,11 @@ fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
 fn get_user_by_fields(row: &SqlRow) -> common::User {
     common::User {
         attributes: get_list(&row.get::<_, String>(0)),
-        bot: row.get(1),
-        id: row.get::<_, i64>(2) as usize,
-        name: row.get(3),
-        nick: row.get(4)
+        ban: row.get(1),
+        bot: row.get(2),
+        id: row.get::<_, i64>(3) as usize,
+        name: row.get(4),
+        nick: row.get(5)
     }
 }
 fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
@@ -495,7 +515,7 @@ fn handle_client(
                     match packet {
                         Packet::Close => { close!(); }
                         Packet::Login(login) => {
-                            let mut stmt = db.prepare_cached("SELECT id, bot, token, password FROM users WHERE name = ?")
+                            let mut stmt = db.prepare_cached("SELECT id, ban, bot, token, password FROM users WHERE name = ?")
                                 .unwrap();
                             let mut rows = stmt.query(&[&login.name]).unwrap();
 
@@ -503,11 +523,14 @@ fn handle_client(
                                 let row = row.unwrap();
 
                                 let row_id = row.get::<_, i64>(0) as usize;
-                                let row_bot: bool = row.get(1);
-                                let row_token:    String = row.get(2);
-                                let row_password: String = row.get(3);
+                                let row_ban: bool = row.get(1);
+                                let row_bot: bool = row.get(2);
+                                let row_token:    String = row.get(3);
+                                let row_password: String = row.get(4);
 
-                                if row_bot == login.bot {
+                                if row_ban {
+                                    reply = Some(Packet::Err(common::ERR_LOGIN_BANNED));
+                                } else if row_bot == login.bot {
                                      if let Some(password) = login.password {
                                         let valid = attempt_or!(bcrypt::verify(&password, &row_password), {
                                             close!();
@@ -584,6 +607,7 @@ fn handle_client(
                                     reply = Some(Packet::UserReceive(common::UserReceive {
                                         inner: common::User {
                                             attributes: Vec::new(),
+                                            ban: false,
                                             bot: login.bot,
                                             id: id,
                                             name: login.name,

@@ -530,9 +530,15 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             // Read the above comment, thank you ---------------------------^
                             let mut users: Vec<_> = session.users.values().collect();
                             users.sort_by_key(|item| &item.name);
-                            for attribute in users {
-                                if !result.is_empty() { result.push_str(", "); }
-                                result.push_str(&attribute.name);
+                            for banned in &[false, true] {
+                                if *banned {
+                                    result.push_str("\nBanned:\n");
+                                }
+                                for attribute in &users {
+                                    if attribute.ban != *banned { continue; }
+                                    if !result.is_empty() { result.push_str(", "); }
+                                    result.push_str(&attribute.name);
+                                }
                             }
                             println!("{}", result);
                         },
