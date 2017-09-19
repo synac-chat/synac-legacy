@@ -353,7 +353,7 @@ fn main() {
                                             let digest = openssl::sha::sha256(&pem);
                                             let mut digest_str = String::with_capacity(64);
                                             for byte in &digest {
-                                                digest_str.push_str(&format!("{:X}", byte));
+                                                digest_str.push_str(&format!("{:0X}", byte));
                                             }
                                             use std::ascii::AsciiExt;
                                             public_key.trim().eq_ignore_ascii_case(&digest_str)

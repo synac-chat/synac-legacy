@@ -162,7 +162,7 @@ fn main() {
         let pem = openssl::sha::sha256(&identity.pkey.public_key_to_pem().unwrap());
         let mut pem_str = String::with_capacity(64);
         for byte in &pem {
-            pem_str.push_str(&format!("{:X}", byte));
+            pem_str.push_str(&format!("{:0X}", byte));
         }
         println!("Almost there! To secure your users' connection,");
         println!("you will have to send a piece of data manually.");
