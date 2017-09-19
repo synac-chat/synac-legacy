@@ -89,9 +89,15 @@ fn main() {
     db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@humans', 0)", &[]).unwrap();
     db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',     0)", &[]).unwrap();
     db.execute("CREATE TABLE IF NOT EXISTS channels (
-                    overrides   TEXT NOT NULL DEFAULT '',
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     name        TEXT NOT NULL
+                )", &[])
+        .expect("SQLite table creation failed");
+    db.execute("CREATE TABLE IF NOT EXISTS overrides (
+                    allow       INTEGER NOT NULL,
+                    attribute   INTEGER NOT NULL,
+                    channel     INTEGER NOT NULL,
+                    deny        INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS messages (
@@ -311,39 +317,12 @@ fn from_list(input: &[usize]) -> String {
     }
     result
 }
-fn get_map(input: &[usize]) -> Vec<(usize, (u8, u8))> {
-    let mut result = Vec::new();
-    let mut buf = (None, None);
-
-    for item in input {
-        match buf {
-            (None, None) => buf = (Some(*item), None),
-            (Some(item1), None) => buf = (Some(item1), Some(*item as u8)),
-            (Some(item1), Some(item2)) => result.push((item1, (item2, *item as u8))),
-            _ => unreachable!()
-        }
-    }
-
-    result
-}
-fn from_map(input: &[(usize, (u8, u8))]) -> Vec<usize> {
-    let mut result = Vec::new();
-
-    for item in input {
-        result.push(item.0);
-        result.push((item.1).0 as usize);
-        result.push((item.1).1 as usize);
-    }
-
-    result
-}
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     let mut stmt = db.prepare_cached("SELECT * FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-    if let Some(row) = rows.next() {
-        let row = row.unwrap();
 
-        Some(get_user_by_fields(&row))
+    if let Some(row) = rows.next() {
+        Some(get_user_by_fields(&row.unwrap()))
     } else {
         None
     }
@@ -387,6 +366,7 @@ fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_over
     if !ids.is_empty() { query.push_str(", "); }
     query.push_str(&from_list(ids));
     query.push_str(") ORDER BY pos");
+
     let mut stmt = db.prepare(&query).unwrap();
     let rows = stmt.query_map(&[], |row| (row.get(0), row.get(1))).unwrap();
     let mut rows = rows.map(|row| row.unwrap());
@@ -420,16 +400,45 @@ fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
-        Some(get_channel_by_fields(&row))
+        Some(get_channel_by_fields(&db, &row))
     } else {
         None
     }
 }
-fn get_channel_by_fields(row: &SqlRow) -> common::Channel {
+fn get_channel_by_fields(db: &SqlConnection, row: &SqlRow) -> common::Channel {
+    let id = row.get::<_, i64>(0);
+
+    let mut stmt = db.prepare_cached("SELECT allow, attribute, deny FROM overrides WHERE channel = ?").unwrap();
+    let mut rows = stmt.query(&[&id]).unwrap();
+
+    let mut overrides = Vec::new();
+
+    while let Some(row) = rows.next() {
+        let row = row.unwrap();
+        overrides.push((row.get::<_, i64>(1) as usize, (row.get(0), row.get(2))));
+    }
+
     common::Channel {
-        overrides: get_map(&get_list(&row.get::<_, String>(0))),
-        id: row.get::<_, i64>(1) as usize,
-        name: row.get(2)
+        overrides: overrides,
+        id: id as usize,
+        name: row.get(1)
+    }
+}
+fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &[(usize, (u8, u8))]) {
+    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(channel as i64)]).unwrap();
+
+    let mut stmt_exists = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?") .unwrap();
+    let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, attribute, channel, deny) VALUES (?, ?, ?, ?)")
+        .unwrap();
+
+    for &(id, (allow, deny)) in overrides {
+        let count: i64 = stmt_exists.query_row(
+            &[&(id as i64)],
+            |row| row.get(0)
+        ).unwrap();
+        if count as usize > 0 {
+            stmt_insert.execute(&[&allow, &(id as i64), &(channel as i64), &deny]).unwrap();
+        }
     }
 }
 fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
@@ -518,8 +527,9 @@ fn handle_client(
                     match packet {
                         Packet::Close => { close!(); }
                         Packet::Login(login) => {
-                            let mut stmt = db.prepare_cached("SELECT id, ban, bot, token, password FROM users WHERE name = ?")
-                                .unwrap();
+                            let mut stmt = db.prepare_cached(
+                                "SELECT id, ban, bot, token, password FROM users WHERE name = ?"
+                            ).unwrap();
                             let mut rows = stmt.query(&[&login.name]).unwrap();
 
                             if let Some(row) = rows.next() {
@@ -763,7 +773,7 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE));
                             }
                         },
-                        Packet::ChannelCreate(mut channel) => {
+                        Packet::ChannelCreate(channel) => {
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
@@ -778,26 +788,17 @@ fn handle_client(
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    {
-                                        let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
-                                            .unwrap();
-                                        channel.overrides.retain(|&(id, _)| {
-                                            let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
-                                            count >= 1
-                                        });
-                                    }
                                     db.execute(
                                         "INSERT INTO channels (overrides, name) VALUES (?, ?)",
-                                        &[
-                                            &from_list(&from_map(&channel.overrides)),
-                                            &channel.name
-                                        ]
+                                        &[&channel.name]
                                     ).unwrap();
+                                    let channel_id = db.last_insert_rowid() as usize;
+                                    insert_channel_overrides(&db, channel_id, &channel.overrides);
 
                                     reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                         inner: common::Channel {
                                             overrides:  channel.overrides,
-                                            id: db.last_insert_rowid() as usize,
+                                            id: channel_id,
                                             name: channel.name
                                         }
                                     }));
@@ -806,7 +807,7 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelUpdate(event) => {
-                            let mut channel = event.inner;
+                            let channel = event.inner;
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
@@ -822,22 +823,11 @@ fn handle_client(
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                     } else {
-                                        {
-                                            let mut stmt = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?")
-                                                .unwrap();
-                                            channel.overrides.retain(|&(id, _)| {
-                                                let count: i64 = stmt.query_row(&[&(id as i64)], |row| row.get(0)).unwrap();
-                                                count >= 1
-                                            });
-                                        }
                                         db.execute(
-                                            "UPDATE channels SET overrides = ?, name = ? WHERE id = ?",
-                                            &[
-                                                &from_list(&from_map(&channel.overrides)),
-                                                &channel.name,
-                                                &(channel.id as i64)
-                                            ]
+                                            "UPDATE channels SET name = ? WHERE id = ?",
+                                            &[&channel.name, &(channel.id as i64)]
                                         ).unwrap();
+                                        insert_channel_overrides(&db, channel.id, &channel.overrides);
 
                                         reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                             inner: common::Channel {
@@ -1137,7 +1127,7 @@ fn handle_client(
                                 let row = row.unwrap();
 
                                 write(writer, Packet::ChannelReceive(common::ChannelReceive {
-                                    inner: get_channel_by_fields(&row),
+                                    inner: get_channel_by_fields(&db, &row),
                                 }));
                             }
                         } {
