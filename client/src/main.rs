@@ -119,21 +119,56 @@ fn main() {
                                     Ok(Packet::ChannelReceive(event)) => {
                                         session.channels.insert(event.inner.id, event.inner);
                                     },
+                                    Ok(Packet::ChannelDeleteReceive(event)) => {
+                                        session.channels.remove(&event.inner.id);
+                                    },
                                     Ok(Packet::AttributeReceive(event)) => {
                                         if event.new {
-                                            for attr in session.attributes.values_mut() {
-                                                if attr.pos >= event.inner.pos {
-                                                    attr.pos += 1;
+                                            let pos = if let Some(old) = session.attributes.get(&event.inner.id) {
+                                                Some(old.pos)
+                                            } else { None };
+                                            if let Some(pos) = pos {
+                                                if event.inner.pos > pos {
+                                                    for attr in session.attributes.values_mut() {
+                                                        if attr.pos > pos && attr.pos <= event.inner.pos {
+                                                            attr.pos -= 1;
+                                                        }
+                                                    }
+                                                } else if event.inner.pos < pos {
+                                                    for attr in session.attributes.values_mut() {
+                                                        if attr.pos >= event.inner.pos && attr.pos < pos {
+                                                            attr.pos += 1;
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                for attr in session.attributes.values_mut() {
+                                                    if attr.pos >= event.inner.pos {
+                                                        attr.pos += 1;
+                                                    }
                                                 }
                                             }
                                         }
                                         session.attributes.insert(event.inner.id, event.inner);
+                                    },
+                                    Ok(Packet::AttributeDeleteReceive(event)) => {
+                                        for attr in session.attributes.values_mut() {
+                                            if attr.pos > event.inner.pos {
+                                                attr.pos -= 1;
+                                            }
+                                        }
+                                        session.attributes.remove(&event.inner.id);
                                     },
                                     Ok(Packet::UserReceive(event)) => {
                                         session.users.insert(event.inner.id, event.inner);
                                     },
                                     Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
                                         println!("{}It appears this channel was deleted", cursor::Restore);
+                                        to_terminal_bottom();
+                                        flush!();
+                                    },
+                                    Ok(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE)) => {
+                                        println!("{}It appears this attribute was deleted", cursor::Restore);
                                         to_terminal_bottom();
                                         flush!();
                                     },
@@ -486,15 +521,19 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 "create" => {
-                    usage_min!(2, "create <\"channel\"/\"attribute\"> <name> [data]");
+                    usage_min!(2, "create <\"attribute\"/\"channel\"> <name> [data]");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let packet = match &*args[0] {
                         "channel" => {
                             usage_max!(2, "create channel <name>");
+                            let mut name = args.remove(1);
+                            if name.starts_with('#') {
+                                name.drain(..1);
+                            }
                             Packet::ChannelCreate(common::ChannelCreate {
                                 overrides: Vec::new(),
-                                name: args.remove(1)
+                                name: name
                             })
                         },
                         "attribute" => {
@@ -503,11 +542,12 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             if args.len() == 3 {
                                 from_perm_string(&*args[2], &mut allow, &mut deny);
                             }
+                            let max = session.attributes.values().max_by_key(|item| item.pos);
                             Packet::AttributeCreate(common::AttributeCreate {
                                 allow: allow,
                                 deny: deny,
                                 name: args.remove(1),
-                                pos: session.attributes.len(),
+                                pos: max.map_or(1, |item| item.pos+1)
                             })
                         },
                         _ => { println!("Can't create that"); continue; }
@@ -518,7 +558,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                 },
                 "list" => {
-                    usage!(1, "list <\"channels\"/\"attributes\"/\"users\">");
+                    usage!(1, "list <\"attributes\"/\"channels\"/\"users\">");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     match &*args[0] {
@@ -567,7 +607,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                 },
                 "info" => {
-                    usage!(1, "info <channel or attribute name>");
+                    usage!(1, "info <attribute or channel name>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let mut name = &*args[0];
@@ -579,9 +619,14 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
 
                     println!();
                     for channel in session.channels.values() {
-                        if name == channel.name || Ok(channel.id) == id {
+                        if name == channel.name
+                            || (name.starts_with('#') && &name[1..] == channel.name)
+                            || Ok(channel.id) == id {
                             println!("Channel #{}", channel.name);
                             println!("ID: #{}", channel.id);
+                            for &(id, (allow, deny)) in &channel.overrides {
+                                println!("Permission override: Role #{} = {}", id, to_perm_string(allow, deny));
+                            }
                         }
                     }
                     for attribute in session.attributes.values() {
@@ -590,6 +635,28 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                             println!("Permission: {}", to_perm_string(attribute.allow, attribute.deny));
                             println!("ID: #{}", attribute.id);
                             println!("Position: {}", attribute.pos);
+                        }
+                    }
+                    for user in session.users.values() {
+                        if name == user.name || Ok(user.id) == id {
+                            println!("User {}", user.name);
+                            println!(
+                                "Attributes: [{}]",
+                                user.attributes.iter()
+                                    .fold(String::new(), |mut acc, id| {
+                                        if !acc.is_empty() {
+                                            acc.push_str(", ");
+                                        } else {
+                                            acc.push_str(&id.to_string());
+                                        }
+                                        acc
+                                    })
+                            );
+                            if user.ban {
+                                println!("Banned.");
+                            }
+                            println!("Bot: {}", if user.bot { "true" } else { "false" });
+                            println!("ID: #{}", user.id);
                         }
                     }
                 },
@@ -623,6 +690,51 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                     if !found {
                         println!("No channel found with that name");
+                    }
+                },
+                "delete" => {
+                    usage!(2, "delete <\"attribute\"/\"channel\"> <name>");
+
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let mut name = &*args[1];
+
+                    let mut packet = None;
+                    match &*args[0] {
+                        "attribute" => for attribute in session.attributes.values() {
+                            if attribute.name == name {
+                                packet = Some(Packet::AttributeDelete(common::AttributeDelete {
+                                    id: attribute.id
+                                }));
+                                break;
+                            }
+                        },
+                        "channel" => {
+                            if name.starts_with('#') {
+                                name = &name[1..];
+                            }
+                            for channel in session.channels.values() {
+                                if channel.name == name {
+                                    packet = Some(Packet::ChannelDelete(common::ChannelDelete {
+                                        id: channel.id
+                                    }));
+                                    break;
+                                }
+                            }
+                        },
+                        _ => {
+                            println!("Can't delete that");
+                            continue;
+                        }
+                    }
+                    match packet {
+                        None => println!("Nothing found with that name"),
+                        Some(packet) => {
+                            if let Err(err) = common::write(&mut session.stream, &packet) {
+                                println!("Oh no could not delete");
+                                println!("{}", err);
+                            }
+                        }
                     }
                 },
                 _ => {

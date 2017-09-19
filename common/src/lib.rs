@@ -18,10 +18,12 @@ pub const ERR_LOGIN_INVALID: u8 = 0;
 pub const ERR_LOGIN_BANNED:  u8 = 1;
 pub const ERR_LOGIN_EMPTY:   u8 = 2;
 pub const ERR_LOGIN_BOT:     u8 = 3;
-pub const ERR_UNKNOWN_CHANNEL: u8 = 4;
-pub const ERR_LIMIT_REACHED: u8 = 5;
-pub const ERR_MISSING_PERMISSION: u8 = 6;
-pub const ERR_ATTR_INVALID_POS: u8 = 7;
+pub const ERR_UNKNOWN_ATTRIBUTE: u8 = 4;
+pub const ERR_UNKNOWN_CHANNEL: u8 = 5;
+pub const ERR_UNKNOWN_MESSAGE: u8 = 6;
+pub const ERR_LIMIT_REACHED: u8 = 7;
+pub const ERR_MISSING_PERMISSION: u8 = 8;
+pub const ERR_ATTR_INVALID_POS: u8 = 9;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;
@@ -43,8 +45,7 @@ pub struct User {
     pub ban: bool,
     pub bot: bool,
     pub id: usize,
-    pub name: String,
-    pub nick: Option<String>
+    pub name: String
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Channel {
@@ -96,7 +97,7 @@ pub struct ChannelUpdate {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelDelete {
-    pub channel: usize
+    pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageList {
@@ -145,7 +146,15 @@ pub struct AttributeReceive {
     pub new: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct AttributeDeleteReceive {
+    pub inner: Attribute
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelReceive {
+    pub inner: Channel
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct ChannelDeleteReceive {
     pub inner: Channel
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -157,6 +166,10 @@ pub struct MessageReceive {
     pub text: Vec<u8>,
     pub timestamp: i64,
     pub timestamp_edit: Option<i64>
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct MessageDeleteReceive {
+    pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct CommandReceive {
@@ -194,8 +207,11 @@ packet! {
     LoginSuccess,
     UserReceive,
     AttributeReceive,
+    AttributeDeleteReceive,
     ChannelReceive,
+    ChannelDeleteReceive,
     MessageReceive,
+    MessageDeleteReceive,
     CommandReceive
 }
 
