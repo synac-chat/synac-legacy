@@ -356,10 +356,6 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
     }
 }
 fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
-    if ids.is_empty() {
-        return 0;
-    }
-
     let mut query = String::with_capacity(48+3+1+14);
     query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
     query.push_str(if bot { "2" } else { "1" });
@@ -375,7 +371,7 @@ fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_over
     common::perm_apply_iter(&mut perms, &mut rows);
 
     for &(role, chan_perms) in chan_overrides {
-        if ids.contains(&role) {
+        if role <= 2 || ids.contains(&role) {
             common::perm_apply(&mut perms, chan_perms);
         }
     }
@@ -750,6 +746,10 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
                                 } else {
                                     db.execute(
+                                        "DELETE FROM overrides WHERE attribute = ?",
+                                        &[&(attr.id as i64)]
+                                    ).unwrap();
+                                    db.execute(
                                         "UPDATE attributes SET pos = pos - 1 WHERE pos > ?",
                                         &[&(attr.pos as i64)]
                                     ).unwrap();
@@ -853,6 +853,7 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute("DELETE FROM messages WHERE channel = ?", &[&(event.id as i64)]).unwrap();
+                                    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(event.id as i64)]).unwrap();
                                     db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
 
                                     reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
