@@ -87,6 +87,8 @@ fn main() {
                     pos     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
+    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@everyone', 0)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',     0)", &[]).unwrap();
     db.execute("CREATE TABLE IF NOT EXISTS channels (
                     overrides   TEXT NOT NULL DEFAULT '',
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -376,13 +378,16 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
         pos:  row.get::<_, i64>(4) as usize
     }
 }
-fn calculate_permissions(db: &SqlConnection, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
+fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
     if ids.is_empty() {
         return 0;
     }
 
-    let mut query = String::with_capacity(48+1+14);
-    query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
+    let mut query = String::with_capacity(51+1+14);
+    query.push_str("SELECT allow, deny FROM attributes WHERE id IN (1, ");
+    if bot {
+        query.push_str("2, ");
+    }
     query.push_str(&from_list(ids));
     query.push_str(") ORDER BY pos");
     let mut stmt = db.prepare(&query).unwrap();
@@ -401,13 +406,14 @@ fn calculate_permissions(db: &SqlConnection, ids: &[usize], chan_overrides: &[(u
     perms
 }
 fn calculate_permissions_by_user(db: &SqlConnection, id: usize, chan_overrides: &[(usize, (u8, u8))]) -> Option<u8> {
-    let mut stmt = db.prepare_cached("SELECT attributes FROM users WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT attributes, bot FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 
     if let Some(row) = rows.next() {
+        let row = row.unwrap();
         // Yes I realize I could pass row.get(0) directly.
         // However, what about SQL injections?
-        Some(calculate_permissions(db, &get_list(&row.unwrap().get::<_, String>(0)), chan_overrides))
+        Some(calculate_permissions(db, row.get(1), &get_list(&row.get::<_, String>(1)), chan_overrides))
     } else {
         None
     }
@@ -632,7 +638,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions(&db, &user.attributes, &channel.overrides),
+                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
                                     common::PERM_WRITE
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -705,15 +711,15 @@ fn handle_client(
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    let (count, min, max): (i32, i32, i32) = db.query_row(
-                                        "SELECT COUNT(*), MIN(pos), MAX(pos) FROM attributes",
+                                    let (count, max): (i32, i32) = db.query_row(
+                                        "SELECT COUNT(*), MAX(pos) FROM attributes",
                                         &[],
-                                        |row| (row.get(0), row.get(1), row.get(2))
+                                        |row| (row.get(0), row.get(1))
                                     ).unwrap();
 
                                     if count as usize > config.limit_attribute_amount_max {
                                         reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                                    } else if attr.pos < min as usize || attr.pos > max as usize + 1 {
+                                    } else if attr.pos == 0 || attr.pos > max as usize + 1 {
                                         reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
                                     } else {
                                         db.execute(

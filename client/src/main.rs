@@ -491,14 +491,14 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     let session = require_session!(session);
                     let packet = match &*args[0] {
                         "channel" => {
-                            usage_max!(2, "create <\"channel\"/\"attribute\"> <name> [data]");
+                            usage_max!(2, "create channel <name>");
                             Packet::ChannelCreate(common::ChannelCreate {
                                 overrides: Vec::new(),
                                 name: args.remove(1)
                             })
                         },
                         "attribute" => {
-                            usage_max!(3, "create <\"channel\"/\"attribute\"> <name> [data]");
+                            usage_max!(3, "create attribute <name> [data]");
                             let (mut allow, mut deny) = (0, 0);
                             if args.len() == 3 {
                                 from_perm_string(&*args[2], &mut allow, &mut deny);
@@ -507,8 +507,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                                 allow: allow,
                                 deny: deny,
                                 name: args.remove(1),
-                                pos: 1,
-                                // pos: session.attributes.len()
+                                pos: session.attributes.len(),
                             })
                         },
                         _ => { println!("Can't create that"); continue; }
