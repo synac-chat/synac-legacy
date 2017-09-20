@@ -43,7 +43,7 @@ macro_rules! attempt_or {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
-    server_owner_id: usize,
+    owner_id: usize,
     limit_user_name_min: usize,
     limit_user_name_max: usize,
     limit_channel_name_min: usize,
@@ -198,7 +198,7 @@ fn main() {
             }
         } else {
             config = Config {
-                server_owner_id: 1,
+                owner_id: 1,
                 limit_user_name_min: 1,
                 limit_user_name_max: 32,
                 limit_channel_name_min: 1,
@@ -290,6 +290,7 @@ fn main() {
 }
 
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+pub const RESERVED_ROLES: usize = 2;
 
 fn gen_token() -> Result<String, openssl::error::ErrorStack> {
     let mut token = vec![0; 64];
@@ -301,7 +302,7 @@ fn gen_token() -> Result<String, openssl::error::ErrorStack> {
     Ok(unsafe { String::from_utf8_unchecked(token) })
 }
 fn has_perm(config: &Config, user: usize, bitmask: u8, perm: u8) -> bool {
-    config.server_owner_id == user || bitmask & perm == perm
+    config.owner_id == user || bitmask & perm == perm
 }
 fn get_list(input: &str) -> Vec<usize> {
     input.split(',')
@@ -310,12 +311,11 @@ fn get_list(input: &str) -> Vec<usize> {
         .collect()
 }
 fn from_list(input: &[usize]) -> String {
-    let mut result = String::new();
-    for i in input {
-        if !result.is_empty() { result.push(','); }
-        result.push_str(&i.to_string());
-    }
-    result
+    input.iter().fold(String::new(), |mut acc, item| {
+        if !acc.is_empty() { acc.push(','); }
+        acc.push_str(&item.to_string());
+        acc
+    })
 }
 fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
     let mut stmt = db.prepare_cached("SELECT * FROM users WHERE id = ?").unwrap();
@@ -372,7 +372,7 @@ fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_over
     common::perm_apply_iter(&mut perms, &mut rows);
 
     for &(role, chan_perms) in chan_overrides {
-        if role <= 2 || ids.contains(&role) {
+        if role <= RESERVED_ROLES || ids.contains(&role) {
             common::perm_apply(&mut perms, chan_perms);
         }
     }
@@ -1081,7 +1081,16 @@ fn handle_client(
                                     }
                                 }
 
-                                let correct = if !changed.is_empty() {
+                                let correct = if id == config.owner_id {
+                                    let mut ok = true;
+                                    for attr in changed {
+                                        if attr <= RESERVED_ROLES {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                    ok
+                                } else if !changed.is_empty() {
                                     let mut query = String::with_capacity(45+1+35);
 
                                     query.push_str("SELECT COUNT(*) FROM attributes WHERE id IN (");
@@ -1094,9 +1103,10 @@ fn handle_client(
                                     }
 
                                     let count: i64 = db.query_row(&query, &[], |row| row.get(0)).unwrap();
-                                    count as usize
-                                } else { 0 };
-                                if changed.len() == correct {
+                                    changed.len() == count as usize
+                                } else { false };
+
+                                if correct {
                                     db.execute(
                                         "UPDATE users SET attributes = ? WHERE id = ?",
                                         &[&from_list(&user.attributes), &(user.id as i64)]

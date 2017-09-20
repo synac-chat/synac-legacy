@@ -371,10 +371,10 @@ fn main() {
                                     }
                                 };
                                 if let Some(attribute) = session.attributes.get(&id) {
-                                    if attribute.pos == 0 {
-                                        println!("Can't assign that attribute");
-                                        continue;
-                                    }
+                                    // if attribute.pos == 0 {
+                                    //     println!("Can't assign that attribute");
+                                    //     continue;
+                                    // }
                                     if add {
                                         println!("Added: {}", attribute.name);
                                         attributes.push(id);
@@ -454,27 +454,29 @@ fn main() {
                     let session = require_session!(session);
                     match &*args[0] {
                         "channels" => {
-                            let mut result = String::new();
                             // Yeah, cloning this is bad... But what can I do? I need to sort!
                             // Though, I suspect this might be a shallow copy.
                             let mut channels: Vec<_> = session.channels.values().collect();
                             channels.sort_by_key(|item| &item.name);
-                            for channel in channels {
-                                if !result.is_empty() { result.push_str(", "); }
-                                result.push('#');
-                                result.push_str(&channel.name);
-                            }
+
+                            let result = channels.iter().fold(String::new(), |mut acc, channel| {
+                                if !acc.is_empty() { acc.push_str(", "); }
+                                acc.push('#');
+                                acc.push_str(&channel.name);
+                                acc
+                            });
                             println!("{}", result);
                         },
                         "attributes" => {
-                            let mut result = String::new();
                             // Read the above comment, thank you ---------------------------^
                             let mut attributes: Vec<_> = session.attributes.values().collect();
                             attributes.sort_by_key(|item| &item.pos);
-                            for user in attributes {
-                                if !result.is_empty() { result.push_str(", "); }
-                                result.push_str(&user.name);
-                            }
+
+                            let result = attributes.iter().fold(String::new(), |mut acc, attribute| {
+                                if !acc.is_empty() { acc.push_str(", "); }
+                                acc.push_str(&attribute.name);
+                                acc
+                            });
                             println!("{}", result);
                         },
                         "users" => {
@@ -482,15 +484,18 @@ fn main() {
                             // something something above comment
                             let mut users: Vec<_> = session.users.values().collect();
                             users.sort_by_key(|item| &item.name);
+
                             for banned in &[false, true] {
                                 if *banned {
                                     result.push_str("\nBanned:\n");
                                 }
-                                for attribute in &users {
-                                    if attribute.ban != *banned { continue; }
-                                    if !result.is_empty() { result.push_str(", "); }
-                                    result.push_str(&attribute.name);
-                                }
+                                result = users.iter().fold(result, |mut acc, user| {
+                                    if user.ban == *banned {
+                                        if !acc.is_empty() { acc.push_str(", "); }
+                                        acc.push_str(&user.name);
+                                    }
+                                    acc
+                                });
                             }
                             println!("{}", result);
                         },
