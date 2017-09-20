@@ -25,6 +25,19 @@ macro_rules! flush {
         io::stdout().flush().unwrap();
     }
 }
+macro_rules! readline {
+    ($editor:expr, $prompt:expr, $break:expr) => {
+        match $editor.readline($prompt) {
+            Ok(ok) => ok,
+            Err(ReadlineError::Eof) |
+            Err(ReadlineError::Interrupted) => $break,
+            Err(err) => {
+                println!("Couldn't read line: {}", err);
+                $break;
+            }
+        }
+    }
+}
 
 mod connect;
 mod listener;
@@ -101,15 +114,7 @@ fn main() {
     let mut editor = rustyline::Editor::<()>::new();
     loop {
         to_terminal_bottom();
-        let input = match editor.readline("> ") {
-            Ok(ok) => ok,
-            Err(ReadlineError::Eof) |
-            Err(ReadlineError::Interrupted) => break,
-            Err(err) => {
-                println!("Couldn't read line: {}", err);
-                break;
-            }
-        };
+        let input = readline!(editor, "> ", { break; });
         print!("{}", cursor::Restore);
         if input.is_empty() {
             continue;
@@ -215,7 +220,10 @@ fn main() {
                             usage_max!(3, "create attribute <name> [data]");
                             let (mut allow, mut deny) = (0, 0);
                             if args.len() == 3 {
-                                from_perm_string(&*args[2], &mut allow, &mut deny);
+                                if !from_perm_string(&*args[2], &mut allow, &mut deny) {
+                                    println!("Invalid permission string");
+                                    continue;
+                                }
                             }
                             let max = session.attributes.values().max_by_key(|item| item.pos);
                             Packet::AttributeCreate(common::AttributeCreate {
@@ -232,55 +240,145 @@ fn main() {
                         println!("{}", err);
                     }
                 },
-                "delete" => {
-                    usage!(2, "delete <\"attribute\"/\"channel\"> <name> OR delete message <id>");
+                "update" => {
+                    usage!(2, "update <\"attribute\"/\"channel\"> <id>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
-                    let mut name = &*args[1];
+                    let id = match args[1].parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!("Not a valid number");
+                            continue;
+                        }
+                    };
 
-                    let mut packet = None;
-                    match &*args[0] {
-                        "attribute" => for attribute in session.attributes.values() {
-                            if attribute.name == name {
-                                packet = Some(Packet::AttributeDelete(common::AttributeDelete {
-                                    id: attribute.id
-                                }));
-                                break;
-                            }
-                        },
-                        "channel" => {
-                            if name.starts_with('#') {
-                                name = &name[1..];
-                            }
-                            for channel in session.channels.values() {
-                                if channel.name == name {
-                                    packet = Some(Packet::ChannelDelete(common::ChannelDelete {
-                                        id: channel.id
-                                    }));
-                                    break;
+                    let packet = match &*args[0] {
+                        "attribute" => if let Some(attribute) = session.attributes.get(&id) {
+                                let (mut allow, mut deny) = (attribute.allow, attribute.deny);
+
+                                println!("Editing: {}", attribute.name);
+                                println!("(Press enter to keep current value)");
+                                println!();
+
+                                let name = readline!(editor,
+                                    &format!("Name [{}]: ", attribute.name),
+                                    { continue; }
+                                );
+                                let mut name = name.trim();
+                                if name.is_empty() { name = &attribute.name };
+                                let perms = readline!(
+                                    editor,
+                                    &format!("Permission [{}]: ", to_perm_string(allow, deny)),
+                                    { continue; }
+                                );
+                                if !from_perm_string(&perms, &mut allow, &mut deny) {
+                                    println!("Invalid permission string");
+                                    continue;
                                 }
-                            }
-                        },
-                        "message" => packet = Some(Packet::MessageDelete(common::MessageDelete {
-                            id: match name.parse() {
-                                Ok(ok) => ok,
-                                Err(_) => { println!("That's not an ID"); continue; }
-                            }
-                        })),
+                                let pos = readline!(
+                                    editor,
+                                    &format!("Position [{}]: ", attribute.pos),
+                                    { continue; }
+                                );
+                                let pos = pos.trim();
+                                let pos = if pos.is_empty() {
+                                    attribute.pos
+                                } else {
+                                    match pos.parse() {
+                                        Ok(ok) => ok,
+                                        Err(_) => {
+                                            println!("Not a valid number");
+                                            continue;
+                                        }
+                                    }
+                                };
+
+                                Some(Packet::AttributeUpdate(common::AttributeUpdate {
+                                    inner: common::Attribute {
+                                        allow: allow,
+                                        deny: deny,
+                                        id: attribute.id,
+                                        name: name.to_string(),
+                                        pos: pos
+                                    }
+                                }))
+                            } else { None },
+                        "channel" => if let Some(channel) = session.channels.get(&id) {
+                                println!("Editing: #{}", channel.name);
+                                println!("(Press enter to keep current value)");
+                                println!();
+
+                                let name = readline!(
+                                    editor,
+                                    &format!("Name [{}]: ", channel.name),
+                                    { continue; }
+                                );
+                                let mut name = name.trim();
+                                if name.is_empty() { name = &channel.name }
+                                Some(Packet::ChannelUpdate(common::ChannelUpdate {
+                                    inner: common::Channel {
+                                        id: channel.id,
+                                        name: name.to_string(),
+                                        overrides: Vec::new()
+                                    },
+                                    keep_overrides: true
+                                }))
+                            } else { None },
                         _ => {
                             println!("Can't delete that");
                             continue;
                         }
-                    }
-                    match packet {
-                        None => println!("Nothing found with that name/id"),
-                        Some(packet) => {
-                            if let Err(err) = common::write(&mut session.stream, &packet) {
-                                println!("Oh no could not delete");
-                                println!("{}", err);
-                            }
+                    };
+                    if let Some(packet) = packet {
+                        if let Err(err) = common::write(&mut session.stream, &packet) {
+                            println!("Oh no could not delete");
+                            println!("{}", err);
                         }
+                    } else {
+                        println!("Nothing with that ID");
+                    }
+                },
+                "delete" => {
+                    usage!(2, "delete <\"attribute\"/\"channel\"/\"message\"> <id>");
+
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let id = match args[1].parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!("Failed to parse ID");
+                            continue;
+                        }
+                    };
+
+                    let packet = match &*args[0] {
+                        "attribute" => if session.attributes.contains_key(&id) {
+                            Some(Packet::AttributeDelete(common::AttributeDelete {
+                                id: id
+                            }))
+                        } else { None },
+                        "channel" => if session.channels.contains_key(&id) {
+                            Some(Packet::ChannelDelete(common::ChannelDelete {
+                                id: id
+                            }))
+                        } else { None },
+                        "message" =>
+                            Some(Packet::MessageDelete(common::MessageDelete {
+                                id: id
+                            })),
+                        _ => {
+                            println!("Can't delete that");
+                            continue;
+                        }
+                    };
+                    if let Some(packet) = packet {
+                        if let Err(err) = common::write(&mut session.stream, &packet) {
+                            println!("Oh no could not delete");
+                            println!("{}", err);
+                        }
+                    } else {
+                        println!("Nothing with that ID");
                     }
                 },
                 "list" => {
@@ -519,17 +617,19 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
     for c in input.chars() {
         if c == '+' || c == '-' || c == '=' {
             mode = c;
+            continue;
         }
         let perm = match c {
             'r' => common::PERM_READ,
             'w' => common::PERM_WRITE,
             'c' => common::PERM_MANAGE_CHANNELS,
             'a' => common::PERM_MANAGE_ATTRIBUTES,
+            ' ' => continue,
             _   => return false
         };
         match mode {
-            '+' => *allow |= perm,
-            '-' => *deny |= perm,
+            '+' => { *allow |= perm; *deny &= !perm; },
+            '-' => { *allow &= !perm; *deny |= perm },
             '=' => { *allow &= !perm; *deny &= !perm }
             _   => unreachable!()
         }

@@ -112,6 +112,11 @@ pub fn listen(session: Arc<Mutex<Option<Session>>>, sent_sender: mpsc::SyncSende
                                     to_terminal_bottom();
                                     flush!();
                                 },
+                                Ok(Packet::Err(common::ERR_ATTR_LOCKED_NAME)) => {
+                                    println!("{}Can't change the name of that attribute", cursor::Restore);
+                                    to_terminal_bottom();
+                                    flush!();
+                                },
                                 Ok(_) => {
                                     unimplemented!();
                                 },

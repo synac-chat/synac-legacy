@@ -33,16 +33,7 @@ pub fn connect<T: rustyline::completion::Completer>(
         println!("The server owner should have given you this.");
         println!("Once you have it, enter it here:");
         flush!();
-        let result = editor.readline("");
-        public_key = match result {
-            Err(ReadlineError::Eof) |
-            Err(ReadlineError::Interrupted) => return None,
-            Ok(ok) => ok,
-            Err(err) => {
-                println!("Couldn't read line: {}", err);
-                return None;
-            }
-        };
+        public_key = readline!(editor, "", { return None; });
 
         db.execute(
             "INSERT INTO servers (ip, key) VALUES (?, ?)",
@@ -154,7 +145,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         use termion::input::TermRead;
         let pass = match io::stdin().read_passwd(&mut io::stdout()) {
             Ok(Some(some)) => some,
-            Ok(None) => return None,
+            Ok(None) => { println!(); return None },
             Err(err) => {
                 println!("Failed to read password");
                 println!("{}", err);

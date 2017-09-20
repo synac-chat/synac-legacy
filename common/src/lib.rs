@@ -23,6 +23,7 @@ pub const ERR_UNKNOWN_MESSAGE: u8 = 6;
 pub const ERR_LIMIT_REACHED: u8 = 7;
 pub const ERR_MISSING_PERMISSION: u8 = 8;
 pub const ERR_ATTR_INVALID_POS: u8 = 9;
+pub const ERR_ATTR_LOCKED_NAME: u8 = 10;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;
@@ -93,7 +94,8 @@ pub struct ChannelCreate {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelUpdate {
-    pub inner: Channel
+    pub inner: Channel,
+    pub keep_overrides: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelDelete {

@@ -697,8 +697,10 @@ fn handle_client(
                                         |row| row.get(0)
                                     ).unwrap();
 
-                                    if attr.pos == 0 || attr.pos > max as usize {
+                                    if (attr.pos == 0 && old.pos != 0) || attr.pos > max as usize {
                                         reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                                    } else if attr.pos == 0 && attr.name != old.name {
+                                        reply = Some(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
                                     } else {
                                         if attr.pos > old.pos {
                                             db.execute(
@@ -720,7 +722,7 @@ fn handle_client(
                                             inner: common::Attribute {
                                                 allow: attr.allow,
                                                 deny: attr.deny,
-                                                id: db.last_insert_rowid() as usize,
+                                                id: attr.id,
                                                 name: attr.name,
                                                 pos: attr.pos
                                             },
@@ -788,7 +790,7 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
-                                        "INSERT INTO channels (overrides, name) VALUES (?, ?)",
+                                        "INSERT INTO channels (name) VALUES (?)",
                                         &[&channel.name]
                                     ).unwrap();
                                     let channel_id = db.last_insert_rowid() as usize;
@@ -826,12 +828,14 @@ fn handle_client(
                                             "UPDATE channels SET name = ? WHERE id = ?",
                                             &[&channel.name, &(channel.id as i64)]
                                         ).unwrap();
-                                        insert_channel_overrides(&db, channel.id, &channel.overrides);
+                                        if !event.keep_overrides {
+                                            insert_channel_overrides(&db, channel.id, &channel.overrides);
+                                        }
 
                                         reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                             inner: common::Channel {
                                                 overrides:  channel.overrides,
-                                                id: db.last_insert_rowid() as usize,
+                                                id: channel.id,
                                                 name: channel.name
                                             }
                                         }));
