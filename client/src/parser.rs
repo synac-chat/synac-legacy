@@ -4,8 +4,7 @@ pub fn parse(input: &str) -> Vec<String> {
     let mut escape = false;
     let mut quote  = false;
 
-    let mut chars = input.chars();
-    while let Some(c) = chars.next() {
+    for c in input.chars() {
         if escape {
             escape = false;
             if c != '\\' && c != '"' {

@@ -6,7 +6,7 @@ use rustyline::error::ReadlineError;
 
 pub fn connect<T: rustyline::completion::Completer>(
     db: &SqlConnection,
-    nick: &String,
+    nick: &str,
     ip: &str,
     editor: &mut rustyline::Editor<T>,
     ssl: &SslConnector
@@ -95,9 +95,9 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
     if let Some(token) = token {
         let packet = Packet::Login(common::Login {
             bot: false,
-            name: nick.clone(),
+            name: nick.to_string(),
             password: None,
-            token: Some(token.clone())
+            token: Some(token.to_string())
         });
 
         if let Err(err) = common::write(&mut stream, &packet) {
@@ -165,7 +165,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
 
         let packet = Packet::Login(common::Login {
             bot: false,
-            name: nick.clone(),
+            name: nick.to_string(),
             password: Some(pass),
             token: None
         });

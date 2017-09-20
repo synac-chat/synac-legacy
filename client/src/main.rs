@@ -71,9 +71,9 @@ fn main() {
         .expect("Couldn't create SQLite table");
 
     #[cfg(unix)]
-    let mut nick = env::var("USER").unwrap_or("unknown".to_string());
+    let mut nick = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     #[cfg(windows)]
-    let mut nick = env::var("USERNAME").unwrap_or("unknown".to_string());
+    let mut nick = env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string());
     #[cfg(not(any(unix, windows)))]
     let mut nick = "unknown".to_string();
 
@@ -81,7 +81,7 @@ fn main() {
         .expect("Failed to create SSL connector D:")
         .build();
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
-    let session_clone = session.clone();
+    let session_clone = Arc::clone(&session);
 
     let _screen = AlternateScreen::from(io::stdout());
 
@@ -346,7 +346,7 @@ fn main() {
                     println!();
                     for channel in session.channels.values() {
                         if name == channel.name
-                            || (name.starts_with('#') && &name[1..] == channel.name)
+                            || (name.starts_with('#') && name[1..] == channel.name)
                             || Ok(channel.id) == id {
                             println!("Channel #{}", channel.name);
                             println!("ID: #{}", channel.id);
@@ -475,11 +475,8 @@ fn main() {
 }
 
 fn to_terminal_bottom() {
-    match termion::terminal_size() {
-        Ok((_, height)) => {
-            print!("{}{}", cursor::Save, cursor::Goto(0, height-1));
-        },
-        Err(_) => {}
+    if let Ok((_, height)) = termion::terminal_size() {
+        print!("{}{}", cursor::Save, cursor::Goto(0, height-1));
     }
 }
 
@@ -542,7 +539,7 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
 }
 
 fn parse_ip(input: &str) -> Option<SocketAddr> {
-    let mut parts = input.split(":");
+    let mut parts = input.split(':');
     let ip = match parts.next() {
         Some(some) => some,
         None => return None

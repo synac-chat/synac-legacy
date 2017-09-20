@@ -4,7 +4,6 @@ extern crate common;
 extern crate futures;
 extern crate openssl;
 extern crate rusqlite;
-extern crate serde;
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
 extern crate tokio_core;
@@ -238,11 +237,11 @@ fn main() {
     let server = listener.incoming().for_each(|(conn, addr)| {
         use tokio_io::AsyncRead;
 
-        let config_clone = config.clone();
-        let conn_id_clone = conn_id.clone();
-        let db_clone = db.clone();
-        let handle_clone = handle.clone();
-        let sessions_clone = sessions.clone();
+        let config_clone = Rc::clone(&config);
+        let conn_id_clone = Rc::clone(&conn_id);
+        let db_clone = Rc::clone(&db);
+        let handle_clone = Rc::clone(&handle);
+        let sessions_clone = Rc::clone(&sessions);
 
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
             let (reader, writer) = conn.split();
@@ -294,7 +293,7 @@ pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ
 fn gen_token() -> Result<String, openssl::error::ErrorStack> {
     let mut token = vec![0; 64];
     rand::rand_bytes(&mut token)?;
-    for byte in token.iter_mut() {
+    for byte in &mut token {
         *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
     }
 
@@ -396,7 +395,7 @@ fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
     if let Some(row) = rows.next() {
         let row = row.unwrap();
-        Some(get_channel_by_fields(&db, &row))
+        Some(get_channel_by_fields(db, &row))
     } else {
         None
     }
@@ -485,7 +484,7 @@ fn handle_client(
         }
     }
 
-    let handle_clone = handle.clone();
+    let handle_clone = Rc::clone(&handle);
     let length = io::read_exact(reader, [0; 2])
         .map_err(|_| ())
         .and_then(move |(reader, bytes)| {
@@ -495,7 +494,7 @@ fn handle_client(
                 close!();
             }
 
-            let handle_clone_clone_ugh = handle_clone.clone();
+            let handle_clone_clone_ugh = Rc::clone(&handle_clone);
             let lines = io::read_exact(reader, vec![0; size])
                 .map_err(|_| ())
                 .and_then(move |(reader, bytes)| {
