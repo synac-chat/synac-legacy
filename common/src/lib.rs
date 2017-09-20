@@ -13,23 +13,25 @@ pub const LIMIT_MESSAGE:      usize = 16384;
 
 pub const LIMIT_MESSAGE_LIST: usize = 64;
 
-pub const ERR_LOGIN_INVALID: u8 = 0;
-pub const ERR_LOGIN_BANNED:  u8 = 1;
-pub const ERR_LOGIN_EMPTY:   u8 = 2;
-pub const ERR_LOGIN_BOT:     u8 = 3;
-pub const ERR_UNKNOWN_ATTRIBUTE: u8 = 4;
-pub const ERR_UNKNOWN_CHANNEL: u8 = 5;
-pub const ERR_UNKNOWN_MESSAGE: u8 = 6;
-pub const ERR_LIMIT_REACHED: u8 = 7;
-pub const ERR_MISSING_PERMISSION: u8 = 8;
-pub const ERR_ATTR_INVALID_POS: u8 = 9;
-pub const ERR_ATTR_LOCKED_NAME: u8 = 10;
+pub const ERR_LOGIN_INVALID:      u8 = 0;
+pub const ERR_LOGIN_BANNED:       u8 = 1;
+pub const ERR_LOGIN_EMPTY:        u8 = 2;
+pub const ERR_LOGIN_BOT:          u8 = 3;
+pub const ERR_UNKNOWN_ATTRIBUTE:  u8 = 4;
+pub const ERR_UNKNOWN_CHANNEL:    u8 = 5;
+pub const ERR_UNKNOWN_MESSAGE:    u8 = 6;
+pub const ERR_UNKNOWN_USER:       u8 = 7;
+pub const ERR_LIMIT_REACHED:      u8 = 8;
+pub const ERR_MISSING_PERMISSION: u8 = 9;
+pub const ERR_ATTR_INVALID_POS:   u8 = 10;
+pub const ERR_ATTR_LOCKED_NAME:   u8 = 11;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;
-pub const PERM_MANAGE_MESSAGES:   u8 = 1 << 2;
+pub const PERM_ASSIGN_ATTRIBUTES: u8 = 1 << 2;
 pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 3;
-pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 4;
+pub const PERM_MANAGE_MESSAGES:   u8 = 1 << 4;
+pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 5;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -38,7 +40,8 @@ pub struct Attribute {
     pub deny: u8,
     pub id: usize,
     pub name: String,
-    pub pos: usize
+    pub pos: usize,
+    pub unassignable: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct User {
@@ -66,6 +69,8 @@ pub struct Message {
 
 // CLIENT PACKETS
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Close {}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Login {
     pub bot: bool,
     pub name: String,
@@ -77,7 +82,8 @@ pub struct AttributeCreate {
     pub allow: u8,
     pub deny: u8,
     pub name: String,
-    pub pos: usize
+    pub pos: usize,
+    pub unassignable: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct AttributeUpdate {
@@ -129,7 +135,17 @@ pub struct Command {
     pub recipient: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Close {}
+pub struct UserUpdate {
+    pub attributes: Vec<usize>,
+    pub id: usize
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct LoginUpdate {
+    pub name: Option<String>,
+    pub password_current: Option<String>,
+    pub password_new: Option<String>,
+    pub reset_token: bool
+}
 
 // SERVER PACKETS
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -205,6 +221,8 @@ packet! {
     MessageUpdate,
     MessageDelete,
     Command,
+    UserUpdate,
+    LoginUpdate,
 
     LoginSuccess,
     UserReceive,

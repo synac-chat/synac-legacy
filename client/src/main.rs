@@ -99,6 +99,7 @@ fn main() {
     let _screen = AlternateScreen::from(io::stdout());
 
     println!("{}Welcome, {}", cursor::Goto(1, 1), nick);
+    println!("To quit, type /quit");
     println!("To change your name, type");
     println!("/nick <name>");
     println!("To connect to a server, type");
@@ -166,6 +167,7 @@ fn main() {
             }
 
             match &*command {
+                "quit" => break,
                 "nick" => {
                     usage!(1, "nick <name>");
                     nick = args.remove(0);
@@ -230,7 +232,8 @@ fn main() {
                                 allow: allow,
                                 deny: deny,
                                 name: args.remove(1),
-                                pos: max.map_or(1, |item| item.pos+1)
+                                pos: max.map_or(1, |item| item.pos+1),
+                                unassignable: false
                             })
                         },
                         _ => { println!("Can't create that"); continue; }
@@ -255,76 +258,140 @@ fn main() {
 
                     let packet = match &*args[0] {
                         "attribute" => if let Some(attribute) = session.attributes.get(&id) {
-                                let (mut allow, mut deny) = (attribute.allow, attribute.deny);
+                            let (mut allow, mut deny) = (attribute.allow, attribute.deny);
 
-                                println!("Editing: {}", attribute.name);
-                                println!("(Press enter to keep current value)");
-                                println!();
+                            println!("Editing: {}", attribute.name);
+                            println!("(Press enter to keep current value)");
+                            println!();
 
-                                let name = readline!(editor,
-                                    &format!("Name [{}]: ", attribute.name),
-                                    { continue; }
-                                );
-                                let mut name = name.trim();
-                                if name.is_empty() { name = &attribute.name };
-                                let perms = readline!(
-                                    editor,
-                                    &format!("Permission [{}]: ", to_perm_string(allow, deny)),
-                                    { continue; }
-                                );
-                                if !from_perm_string(&perms, &mut allow, &mut deny) {
-                                    println!("Invalid permission string");
-                                    continue;
+                            let name = readline!(editor,
+                                &format!("Name [{}]: ", attribute.name),
+                                { continue; }
+                            );
+                            let mut name = name.trim();
+                            if name.is_empty() { name = &attribute.name };
+                            let perms = readline!(
+                                editor,
+                                &format!("Permission [{}]: ", to_perm_string(allow, deny)),
+                                { continue; }
+                            );
+                            if !from_perm_string(&perms, &mut allow, &mut deny) {
+                                println!("Invalid permission string");
+                                continue;
+                            }
+                            println!("{} {}", allow, deny);
+                            let pos = readline!(
+                                editor,
+                                &format!("Position [{}]: ", attribute.pos),
+                                { continue; }
+                            );
+                            let pos = pos.trim();
+                            let pos = if pos.is_empty() {
+                                attribute.pos
+                            } else {
+                                match pos.parse() {
+                                    Ok(ok) => ok,
+                                    Err(_) => {
+                                        println!("Not a valid number");
+                                        continue;
+                                    }
                                 }
-                                let pos = readline!(
+                            };
+
+                            Some(Packet::AttributeUpdate(common::AttributeUpdate {
+                                inner: common::Attribute {
+                                    allow: allow,
+                                    deny: deny,
+                                    id: attribute.id,
+                                    name: name.to_string(),
+                                    pos: pos,
+                                    unassignable: attribute.unassignable
+                                }
+                            }))
+                        } else { None },
+                        "channel" => if let Some(channel) = session.channels.get(&id) {
+                            println!("Editing: #{}", channel.name);
+                            println!("(Press enter to keep current value)");
+                            println!();
+
+                            let name = readline!(
+                                editor,
+                                &format!("Name [{}]: ", channel.name),
+                                { continue; }
+                            );
+                            let mut name = name.trim();
+                            if name.is_empty() { name = &channel.name }
+                            Some(Packet::ChannelUpdate(common::ChannelUpdate {
+                                inner: common::Channel {
+                                    id: channel.id,
+                                    name: name.to_string(),
+                                    overrides: Vec::new()
+                                },
+                                keep_overrides: true
+                            }))
+                        } else { None },
+                        "user" => if let Some(user) = session.users.get(&id) {
+                            let mut attributes = user.attributes.clone();
+                            loop {
+                                let result = attributes.iter().fold(String::new(), |mut acc, item| {
+                                    if !acc.is_empty() { acc.push_str(", "); }
+                                    acc.push_str(&item.to_string());
+                                    acc
+                                });
+                                println!("Attributes: [{}]", result);
+                                println!("Commands: add, remove, quit");
+
+                                let line = readline!(
                                     editor,
-                                    &format!("Position [{}]: ", attribute.pos),
-                                    { continue; }
+                                    "> ",
+                                    { break; }
                                 );
-                                let pos = pos.trim();
-                                let pos = if pos.is_empty() {
-                                    attribute.pos
-                                } else {
-                                    match pos.parse() {
-                                        Ok(ok) => ok,
-                                        Err(_) => {
-                                            println!("Not a valid number");
-                                            continue;
-                                        }
+
+                                let parts = parser::parse(&line);
+                                if parts.is_empty() { continue; }
+                                let add = match &*parts[0] {
+                                    "add" => true,
+                                    "remove" => false,
+                                    "quit" => break,
+                                    _ => {
+                                        println!("Unknown command");
+                                        continue;
                                     }
                                 };
 
-                                Some(Packet::AttributeUpdate(common::AttributeUpdate {
-                                    inner: common::Attribute {
-                                        allow: allow,
-                                        deny: deny,
-                                        id: attribute.id,
-                                        name: name.to_string(),
-                                        pos: pos
+                                if parts.len() != 2 {
+                                    println!("Usage: add/remove <id>");
+                                    break;
+                                }
+                                let id = match parts[1].parse() {
+                                    Ok(ok) => ok,
+                                    Err(_) => {
+                                        println!("Invalid ID");
+                                        continue;
                                     }
-                                }))
-                            } else { None },
-                        "channel" => if let Some(channel) = session.channels.get(&id) {
-                                println!("Editing: #{}", channel.name);
-                                println!("(Press enter to keep current value)");
-                                println!();
-
-                                let name = readline!(
-                                    editor,
-                                    &format!("Name [{}]: ", channel.name),
-                                    { continue; }
-                                );
-                                let mut name = name.trim();
-                                if name.is_empty() { name = &channel.name }
-                                Some(Packet::ChannelUpdate(common::ChannelUpdate {
-                                    inner: common::Channel {
-                                        id: channel.id,
-                                        name: name.to_string(),
-                                        overrides: Vec::new()
-                                    },
-                                    keep_overrides: true
-                                }))
-                            } else { None },
+                                };
+                                if let Some(attribute) = session.attributes.get(&id) {
+                                    if attribute.pos == 0 {
+                                        println!("Can't assign that attribute");
+                                        continue;
+                                    }
+                                    if add {
+                                        println!("Added: {}", attribute.name);
+                                        attributes.push(id);
+                                    } else {
+                                        println!("Removed: {}", attribute.name);
+                                        attributes.retain(|item| *item != id);
+                                        // TODO remove_item once stable
+                                    }
+                                } else {
+                                    println!("Couldn't find attribute");
+                                }
+                            }
+                            Some(Packet::UserUpdate(common::UserUpdate {
+                                attributes: attributes,
+                                id: id
+                            }))
+                        } else { None },
                         _ => {
                             println!("Can't delete that");
                             continue;
@@ -470,9 +537,8 @@ fn main() {
                                     .fold(String::new(), |mut acc, id| {
                                         if !acc.is_empty() {
                                             acc.push_str(", ");
-                                        } else {
-                                            acc.push_str(&id.to_string());
                                         }
+                                        acc.push_str(&id.to_string());
                                         acc
                                     })
                             );
@@ -602,11 +668,17 @@ fn to_single_perm_string(bitmask: u8) -> String {
     if bitmask & common::PERM_WRITE == common::PERM_WRITE {
         result.push('w');
     }
-    if bitmask & common::PERM_MANAGE_CHANNELS == common::PERM_MANAGE_CHANNELS {
-        result.push('c');
+    if bitmask & common::PERM_ASSIGN_ATTRIBUTES == common::PERM_ASSIGN_ATTRIBUTES {
+        result.push('s');
     }
     if bitmask & common::PERM_MANAGE_ATTRIBUTES == common::PERM_MANAGE_ATTRIBUTES {
         result.push('a');
+    }
+    if bitmask & common::PERM_MANAGE_CHANNELS == common::PERM_MANAGE_CHANNELS {
+        result.push('c');
+    }
+    if bitmask & common::PERM_MANAGE_MESSAGES == common::PERM_MANAGE_MESSAGES {
+        result.push('m');
     }
 
     result
@@ -622,8 +694,10 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
         let perm = match c {
             'r' => common::PERM_READ,
             'w' => common::PERM_WRITE,
-            'c' => common::PERM_MANAGE_CHANNELS,
+            's' => common::PERM_ASSIGN_ATTRIBUTES,
             'a' => common::PERM_MANAGE_ATTRIBUTES,
+            'c' => common::PERM_MANAGE_CHANNELS,
+            'm' => common::PERM_MANAGE_MESSAGES,
             ' ' => continue,
             _   => return false
         };

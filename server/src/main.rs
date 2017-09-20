@@ -82,11 +82,12 @@ fn main() {
                     deny    INTEGER NOT NULL,
                     id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     name    TEXT NOT NULL,
-                    pos     INTEGER NOT NULL
+                    pos     INTEGER NOT NULL,
+                    unassignable    INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@humans', 0)", &[]).unwrap();
-    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',     0)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@humans', 0, 1)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',   0, 1)", &[]).unwrap();
     db.execute("CREATE TABLE IF NOT EXISTS channels (
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     name        TEXT NOT NULL
@@ -351,7 +352,8 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
         deny: row.get(1),
         id: row.get::<_, i64>(2) as usize,
         name: row.get(3),
-        pos:  row.get::<_, i64>(4) as usize
+        pos:  row.get::<_, i64>(4) as usize,
+        unassignable: row.get(5)
     }
 }
 fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
@@ -544,18 +546,10 @@ fn handle_client(
                                             close!();
                                         });
                                         if valid {
-                                            let token = attempt_or!(gen_token(), {
-                                                eprintln!("Failed to generate random token");
-                                                close!();
-                                            });
-                                            db.execute(
-                                                "UPDATE users SET token = ? WHERE id = ?",
-                                                &[&token, &(row_id as i64)]
-                                            ).unwrap();
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
                                                 created: false,
                                                 id: row_id,
-                                                token: token
+                                                token: row_token
                                             }));
                                             sessions.borrow_mut()
                                                 .get_mut(&conn_id).unwrap()
@@ -657,8 +651,10 @@ fn handle_client(
                                             &[&(attr.pos as i64)]
                                         ).unwrap();
                                         db.execute(
-                                            "INSERT INTO attributes (allow, deny, name, pos) VALUES (?, ?, ?, ?)",
-                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64)]
+                                            "INSERT INTO attributes (allow, deny, name, pos, unassignable)
+                                            VALUES (?, ?, ?, ?, ?)",
+                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64),
+                                            &attr.unassignable]
                                         ).unwrap();
 
                                         reply = Some(Packet::AttributeReceive(common::AttributeReceive {
@@ -667,7 +663,8 @@ fn handle_client(
                                                 deny: attr.deny,
                                                 id: db.last_insert_rowid() as usize,
                                                 name: attr.name,
-                                                pos: attr.pos
+                                                pos: attr.pos,
+                                                unassignable: attr.unassignable
                                             },
                                             new: true
                                         }));
@@ -714,8 +711,11 @@ fn handle_client(
                                             ).unwrap();
                                         }
                                         db.execute(
-                                            "UPDATE attributes SET allow = ?, deny = ?, name = ?, pos = ? WHERE id = ?",
-                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &(attr.id as i64)]
+                                            "UPDATE attributes SET
+                                            allow = ?, deny = ?, name = ?, pos = ?, unassignable = ?
+                                            WHERE id = ?",
+                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &attr.unassignable,
+                                            &(attr.id as i64)]
                                         ).unwrap();
 
                                         reply = Some(Packet::AttributeReceive(common::AttributeReceive {
@@ -724,7 +724,8 @@ fn handle_client(
                                                 deny: attr.deny,
                                                 id: attr.id,
                                                 name: attr.name,
-                                                pos: attr.pos
+                                                pos: attr.pos,
+                                                unassignable: attr.unassignable
                                             },
                                             new: true
                                         }));
@@ -765,7 +766,8 @@ fn handle_client(
                                             deny: attr.deny,
                                             id: attr.id,
                                             name: attr.name,
-                                            pos: attr.pos
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
                                         }
                                     }));
                                     broadcast = true;
@@ -1056,6 +1058,65 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
+                        Packet::UserUpdate(user) => {
+                            let id = get_id!();
+                            if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                common::PERM_ASSIGN_ATTRIBUTES
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
+                            } else if let Some(old) = get_user(&db, user.id) {
+                                let mut changed = Vec::new();
+
+                                for attr in &user.attributes {
+                                    if !old.attributes.contains(&attr) {
+                                        changed.push(*attr);
+                                    }
+                                }
+                                for attr in &old.attributes {
+                                    if !user.attributes.contains(&attr) {
+                                        changed.push(*attr);
+                                    }
+                                }
+
+                                let correct = if !changed.is_empty() {
+                                    let mut query = String::with_capacity(45+1+35);
+
+                                    query.push_str("SELECT COUNT(*) FROM attributes WHERE id IN (");
+                                    query.push_str(&from_list(&changed));
+                                    query.push_str(") AND unassignable = 0 AND pos != 0");
+                                    if !old.attributes.is_empty() {
+                                        query.push_str(" AND pos < (SELECT MAX(pos) FROM attributes WHERE id IN (");
+                                        query.push_str(&from_list(&old.attributes));
+                                        query.push_str("))");
+                                    }
+
+                                    let count: i64 = db.query_row(&query, &[], |row| row.get(0)).unwrap();
+                                    count as usize
+                                } else { 0 };
+                                if changed.len() == correct {
+                                    db.execute(
+                                        "UPDATE users SET attributes = ? WHERE id = ?",
+                                        &[&from_list(&user.attributes), &(user.id as i64)]
+                                    ).unwrap();
+                                } else {
+                                    println!("{}", correct);
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_USER));
+                            }
+
+                        },
+                        // Packet::LoginUpdate(login) => {
+                        //     let id = get_id!();
+
+                        //     if let Some(name) = login.name {
+                        //         db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
+                        //     }
+                        // },
                         _ => unimplemented!()
                     }
 
