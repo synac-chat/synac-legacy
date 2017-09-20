@@ -70,7 +70,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "rmp-serde 0.13.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

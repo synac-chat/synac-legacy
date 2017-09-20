@@ -1,5 +1,4 @@
 extern crate rmp_serde as rmps;
-extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use std::io;
