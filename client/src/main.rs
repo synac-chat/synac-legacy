@@ -4,15 +4,13 @@ extern crate rustyline;
 extern crate termion;
 extern crate common;
 
-mod parser;
-
 use common::Packet;
-use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream, SSL_VERIFY_PEER};
+use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream};
 use rusqlite::Connection as SqlConnection;
 use rustyline::error::ReadlineError;
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -27,6 +25,10 @@ macro_rules! flush {
         io::stdout().flush().unwrap();
     }
 }
+
+mod connect;
+mod listener;
+mod parser;
 
 pub struct Session {
     attributes: HashMap<usize, common::Attribute>,
@@ -93,132 +95,7 @@ fn main() {
     let (sent_sender, sent_receiver) = mpsc::sync_channel(0);
 
     thread::spawn(move || {
-        let mut size = true;
-        let mut buf = vec![0; 2];
-        let mut i = 0;
-        loop {
-            if let Some(ref mut session) = *session_clone.lock().unwrap() {
-                match session.stream.read(&mut buf[i..]) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        i += read;
-                        if i >= buf.len() {
-                            if size {
-                                size = false;
-                                let size = common::decode_u16(&buf) as usize;
-                                buf = vec![0; size];
-                                i = 0;
-                            } else {
-                                match common::deserialize(&buf) {
-                                    Ok(Packet::ChannelReceive(event)) => {
-                                        session.channels.insert(event.inner.id, event.inner);
-                                    },
-                                    Ok(Packet::ChannelDeleteReceive(event)) => {
-                                        session.channels.remove(&event.inner.id);
-                                    },
-                                    Ok(Packet::AttributeReceive(event)) => {
-                                        if event.new {
-                                            let pos = if let Some(old) = session.attributes.get(&event.inner.id) {
-                                                Some(old.pos)
-                                            } else { None };
-                                            if let Some(pos) = pos {
-                                                if event.inner.pos > pos {
-                                                    for attr in session.attributes.values_mut() {
-                                                        if attr.pos > pos && attr.pos <= event.inner.pos {
-                                                            attr.pos -= 1;
-                                                        }
-                                                    }
-                                                } else if event.inner.pos < pos {
-                                                    for attr in session.attributes.values_mut() {
-                                                        if attr.pos >= event.inner.pos && attr.pos < pos {
-                                                            attr.pos += 1;
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                for attr in session.attributes.values_mut() {
-                                                    if attr.pos >= event.inner.pos {
-                                                        attr.pos += 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        session.attributes.insert(event.inner.id, event.inner);
-                                    },
-                                    Ok(Packet::AttributeDeleteReceive(event)) => {
-                                        for attr in session.attributes.values_mut() {
-                                            if attr.pos > event.inner.pos {
-                                                attr.pos -= 1;
-                                            }
-                                        }
-                                        session.attributes.remove(&event.inner.id);
-                                    },
-                                    Ok(Packet::UserReceive(event)) => {
-                                        session.users.insert(event.inner.id, event.inner);
-                                    },
-                                    Ok(Packet::MessageReceive(msg)) => {
-                                        if session.channel == Some(msg.channel.id) {
-                                            println!("{}\r{} (ID #{}): {}", cursor::Restore, msg.author.name, msg.id,
-                                                     String::from_utf8_lossy(&msg.text));
-                                            to_terminal_bottom();
-                                            flush!();
-                                        }
-                                        if msg.author.id == session.id {
-                                            session.last = Some((msg.id, msg.text));
-                                        }
-                                    },
-                                    Ok(Packet::MessageDeleteReceive(event)) => {
-                                        println!("{}Deleted message: {}", cursor::Restore, event.id);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
-                                        println!("{}It appears this channel was deleted", cursor::Restore);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE)) => {
-                                        println!("{}It appears this attribute was deleted", cursor::Restore);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
-                                        println!("{}Too short or too long. No idea which", cursor::Restore);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(Packet::Err(common::ERR_MISSING_PERMISSION)) => {
-                                        println!("{}\rMissing permission", cursor::Restore);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(Packet::Err(common::ERR_ATTR_INVALID_POS)) => {
-                                        println!("{}Invalid attribute position", cursor::Restore);
-                                        to_terminal_bottom();
-                                        flush!();
-                                    },
-                                    Ok(_) => {
-                                        unimplemented!();
-                                    },
-                                    Err(err) => {
-                                        println!("Failed to deserialize message!");
-                                        println!("{}", err);
-                                        continue;
-                                    }
-                                };
-                                size = true;
-                                buf = vec![0; 2];
-                                i = 0;
-                            }
-                            let _ = sent_sender.try_send(());
-                        }
-                    },
-                    Err(_) => {}
-                }
-            }
-            thread::sleep(Duration::from_millis(1));
-            // thread::sleep(Duration::from_millis(250));
-        }
+        listener::listen(session_clone, sent_sender);
     });
 
     let mut editor = rustyline::Editor::<()>::new();
@@ -296,219 +173,7 @@ fn main() {
                         println!("Please disconnect first");
                         continue;
                     }
-
-                    let addr = match parse_ip(&args[0]) {
-                        Some(some) => some,
-                        None => {
-                            println!("Could not parse IP");
-                            continue;
-                        }
-                    };
-
-                    let mut stmt = db.prepare("SELECT key, token FROM servers WHERE ip = ?").unwrap();
-                    let mut rows = stmt.query(&[&addr.to_string()]).unwrap();
-
-                    let public_key;
-                    let mut token: Option<String> = None;
-                    if let Some(row) = rows.next() {
-                        let row = row.unwrap();
-                        public_key = row.get(0);
-                        token = row.get(1);
-                    } else {
-                        println!("To securely connect, we need some data from the server (\"public key\").");
-                        println!("The server owner should have given you this.");
-                        println!("Once you have it, enter it here:");
-                        flush!();
-                        let result = editor.readline("");
-                        public_key = match result {
-                            Err(ReadlineError::Eof) |
-                            Err(ReadlineError::Interrupted) => break,
-                            Ok(ok) => ok,
-                            Err(err) => {
-                                println!("Couldn't read line: {}", err);
-                                break;
-                            }
-                        };
-
-                        db.execute(
-                            "INSERT INTO servers (ip, key) VALUES (?, ?)",
-                            &[&addr.to_string(), &public_key]
-                        ).unwrap();
-                    }
-                    let stream = match TcpStream::connect(addr) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            println!("Could not connect!");
-                            println!("{}", err);
-                            continue;
-                        }
-                    };
-                    let mut stream = {
-                        let mut config = ssl.configure().expect("Failed to configure SSL connector");
-                        config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
-                            match cert.current_cert() {
-                                Some(cert) => match cert.public_key() {
-                                    Ok(pkey) => match pkey.public_key_to_pem() {
-                                        Ok(pem) => {
-                                            let digest = openssl::sha::sha256(&pem);
-                                            let mut digest_str = String::with_capacity(64);
-                                            for byte in &digest {
-                                                digest_str.push_str(&format!("{:0X}", byte));
-                                            }
-                                            use std::ascii::AsciiExt;
-                                            public_key.trim().eq_ignore_ascii_case(&digest_str)
-                                        },
-                                        Err(_) => false
-                                    },
-                                    Err(_) => false
-                                },
-                                None => false
-                            }
-                        });
-
-                        match
-config.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(stream)
-                        {
-                            Ok(ok) => ok,
-                            Err(_) => {
-                                println!("Faild to validate certificate");
-                                continue;
-                            }
-                        }
-                    };
-
-                    let mut id = None;
-                    if let Some(token) = token {
-                        let packet = Packet::Login(common::Login {
-                            bot: false,
-                            name: nick.clone(),
-                            password: None,
-                            token: Some(token.clone())
-                        });
-
-                        if let Err(err) = common::write(&mut stream, &packet) {
-                            println!("Could not request login");
-                            println!("{}", err);
-                            continue;
-                        }
-
-                        match common::read(&mut stream) {
-                            Ok(Packet::LoginSuccess(login)) => {
-                                id = Some(login.id);
-                                if login.created {
-                                    println!("Tried to log in with your token: Apparently an account was created.");
-                                    println!("I think you should stay away from this server. It's weird.");
-                                    continue;
-                                }
-                                println!("Logged in as user #{}", login.id);
-                            },
-                            Ok(Packet::Err(code)) => match code {
-                                common::ERR_LOGIN_INVALID |
-                                common::ERR_LOGIN_EMPTY => {},
-                                common::ERR_LOGIN_BANNED => {
-                                    println!("Oh noes, you have been banned from this server :(");
-                                    continue;
-                                },
-                                common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account");
-                                    continue;
-                                },
-                                common::ERR_LIMIT_REACHED => {
-                                    println!("Username too long");
-                                    continue;
-                                },
-                                _ => {
-                                    println!("The server responded with an invalid error :/");
-                                    continue;
-                                }
-                            },
-                            Ok(_) => {
-                                println!("The server responded with an invalid packet :/");
-                                continue;
-                            }
-                            Err(err) => {
-                                println!("Failed to read from server");
-                                println!("{}", err);
-                                continue;
-                            }
-                        }
-                    }
-
-                    if id.is_none() {
-                        print!("Password: ");
-                        flush!();
-                        use termion::input::TermRead;
-                        let pass = match io::stdin().read_passwd(&mut io::stdout()) {
-                            Ok(Some(some)) => some,
-                            Ok(None) => continue,
-                            Err(err) => {
-                                println!("Failed to read password");
-                                println!("{}", err);
-                                continue;
-                            }
-                        };
-                        println!();
-
-                        let packet = Packet::Login(common::Login {
-                            bot: false,
-                            name: nick.clone(),
-                            password: Some(pass),
-                            token: None
-                        });
-
-                        if let Err(err) = common::write(&mut stream, &packet) {
-                            println!("Could not request login");
-                            println!("{}", err);
-                            continue;
-                        }
-
-                        match common::read(&mut stream) {
-                            Ok(Packet::LoginSuccess(login)) => {
-                                db.execute(
-                                    "UPDATE servers SET token = ? WHERE ip = ?",
-                                    &[&login.token, &addr.to_string()]
-                                ).unwrap();
-                                if login.created {
-                                    println!("Account created");
-                                }
-                                id = Some(login.id);
-                                println!("Logged in as user #{}", login.id);
-                            },
-                            Ok(Packet::Err(code)) => match code {
-                                common::ERR_LOGIN_INVALID => {
-                                    println!("Invalid credentials");
-                                    continue;
-                                },
-                                common::ERR_LOGIN_BANNED => {
-                                    println!("Oh noes, you have been banned from this server :(");
-                                    continue;
-                                },
-                                common::ERR_LOGIN_BOT => {
-                                    println!("This account is a bot account");
-                                    continue;
-                                },
-                                common::ERR_LIMIT_REACHED => {
-                                    println!("Username too long");
-                                    continue;
-                                },
-                                _ => {
-                                    println!("The server responded with an invalid error :/");
-                                    continue;
-                                }
-                            },
-                            Ok(_) => {
-                                println!("The server responded with an invalid packet :/");
-                                continue;
-                            }
-                            Err(err) => {
-                                println!("Failed to read from server");
-                                println!("{}", err);
-                                continue;
-                            }
-                        }
-                    }
-                    stream.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-                    *session = Some(Session::new(id.unwrap(), stream));
+                    *session = connect::connect(&db, &nick, &args[0], &mut editor, &ssl);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -565,6 +230,57 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     if let Err(err) = common::write(&mut session.stream, &packet) {
                         println!("Failed to send packet");
                         println!("{}", err);
+                    }
+                },
+                "delete" => {
+                    usage!(2, "delete <\"attribute\"/\"channel\"> <name> OR delete message <id>");
+
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let mut name = &*args[1];
+
+                    let mut packet = None;
+                    match &*args[0] {
+                        "attribute" => for attribute in session.attributes.values() {
+                            if attribute.name == name {
+                                packet = Some(Packet::AttributeDelete(common::AttributeDelete {
+                                    id: attribute.id
+                                }));
+                                break;
+                            }
+                        },
+                        "channel" => {
+                            if name.starts_with('#') {
+                                name = &name[1..];
+                            }
+                            for channel in session.channels.values() {
+                                if channel.name == name {
+                                    packet = Some(Packet::ChannelDelete(common::ChannelDelete {
+                                        id: channel.id
+                                    }));
+                                    break;
+                                }
+                            }
+                        },
+                        "message" => packet = Some(Packet::MessageDelete(common::MessageDelete {
+                            id: match name.parse() {
+                                Ok(ok) => ok,
+                                Err(_) => { println!("That's not an ID"); continue; }
+                            }
+                        })),
+                        _ => {
+                            println!("Can't delete that");
+                            continue;
+                        }
+                    }
+                    match packet {
+                        None => println!("Nothing found with that name/id"),
+                        Some(packet) => {
+                            if let Err(err) = common::write(&mut session.stream, &packet) {
+                                println!("Oh no could not delete");
+                                println!("{}", err);
+                            }
+                        }
                     }
                 },
                 "list" => {
@@ -700,57 +416,6 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     }
                     if !found {
                         println!("No channel found with that name");
-                    }
-                },
-                "delete" => {
-                    usage!(2, "delete <\"attribute\"/\"channel\"> <name> OR delete message <id>");
-
-                    let mut session = session.lock().unwrap();
-                    let session = require_session!(session);
-                    let mut name = &*args[1];
-
-                    let mut packet = None;
-                    match &*args[0] {
-                        "attribute" => for attribute in session.attributes.values() {
-                            if attribute.name == name {
-                                packet = Some(Packet::AttributeDelete(common::AttributeDelete {
-                                    id: attribute.id
-                                }));
-                                break;
-                            }
-                        },
-                        "channel" => {
-                            if name.starts_with('#') {
-                                name = &name[1..];
-                            }
-                            for channel in session.channels.values() {
-                                if channel.name == name {
-                                    packet = Some(Packet::ChannelDelete(common::ChannelDelete {
-                                        id: channel.id
-                                    }));
-                                    break;
-                                }
-                            }
-                        },
-                        "message" => packet = Some(Packet::MessageDelete(common::MessageDelete {
-                            id: match name.parse() {
-                                Ok(ok) => ok,
-                                Err(_) => { println!("That's not an ID"); continue; }
-                            }
-                        })),
-                        _ => {
-                            println!("Can't delete that");
-                            continue;
-                        }
-                    }
-                    match packet {
-                        None => println!("Nothing found with that name/id"),
-                        Some(packet) => {
-                            if let Err(err) = common::write(&mut session.stream, &packet) {
-                                println!("Oh no could not delete");
-                                println!("{}", err);
-                            }
-                        }
                     }
                 },
                 _ => {
