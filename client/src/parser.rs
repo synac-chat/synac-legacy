@@ -35,11 +35,11 @@ pub fn parse(input: &str) -> Vec<String> {
 #[cfg(test)]
 #[test]
 fn test() {
-    assert_eq!(parse(r#"hello world"#), vec!["hello", "world"]);
-    assert_eq!(parse(r#""hello world""#), vec!["hello world"]);
-    assert_eq!(parse(r#"hel"lo wor"ld"#), vec!["hel\"lo", "wor\"ld"]);
-    assert_eq!(parse(r#"hello\ world"#), vec!["hello\\ world"]);
-    assert_eq!(parse(r#"\h\e\l\l\o world"#), vec!["\\h\\e\\l\\l\\o", "world"]);
-    assert_eq!(parse(r#"\"hello world\""#), vec!["\"hello", "world\""]);
-    assert_eq!(parse(r#"\\\"hello world\\\""#), vec!["\\\"hello", "world\\\""]);
+    assert_eq!(parse(r#"hello world"#), &["hello", "world"]);
+    assert_eq!(parse(r#""hello world""#), &["hello world"]);
+    assert_eq!(parse(r#"hel"lo wor"ld"#), &["hel\"lo", "wor\"ld"]);
+    assert_eq!(parse(r#"hello\ world"#), &["hello\\ world"]);
+    assert_eq!(parse(r#"\h\e\l\l\o world"#), &["\\h\\e\\l\\l\\o", "world"]);
+    assert_eq!(parse(r#"\"hello world\""#), &["\"hello", "world\""]);
+    assert_eq!(parse(r#"\\\"hello world\\\""#), &["\\\"hello", "world\\\""]);
 }
