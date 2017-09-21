@@ -238,10 +238,11 @@ fn main() {
         return;
     });
 
-    let config = Rc::new(config);
-    let conn_id = Rc::new(RefCell::new(0usize));
-    let db = Rc::new(db);
-    let handle = Rc::new(handle);
+    let config   = Rc::new(config);
+    let conn_id  = Rc::new(RefCell::new(0usize));
+    let db       = Rc::new(db);
+    let handle   = Rc::new(handle);
+    let users    = Rc::new(RefCell::new(HashMap::new()));
     let sessions = Rc::new(RefCell::new(HashMap::new()));
 
     println!("I'm alive!");
@@ -249,10 +250,11 @@ fn main() {
     let server = listener.incoming().for_each(|(conn, addr)| {
         use tokio_io::AsyncRead;
 
-        let config_clone = Rc::clone(&config);
-        let conn_id_clone = Rc::clone(&conn_id);
-        let db_clone = Rc::clone(&db);
-        let handle_clone = Rc::clone(&handle);
+        let config_clone   = Rc::clone(&config);
+        let conn_id_clone  = Rc::clone(&conn_id);
+        let db_clone       = Rc::clone(&db);
+        let handle_clone   = Rc::clone(&handle);
+        let users_clone    = Rc::clone(&users);
         let sessions_clone = Rc::clone(&sessions);
 
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
@@ -279,10 +281,6 @@ fn main() {
 
             sessions_clone.borrow_mut().insert(my_conn_id, Session {
                 id: None,
-                packet_time_cheap: Instant::now(),
-                packet_time_expensive: Instant::now(),
-                packets_cheap: 0,
-                packets_expensive: 0,
                 writer: writer
             });
 
@@ -292,6 +290,7 @@ fn main() {
                 db_clone,
                 handle_clone,
                 reader,
+                users_clone,
                 sessions_clone
             );
 
@@ -475,9 +474,7 @@ fn get_message_by_fields(row: &SqlRow) -> common::Message {
     }
 }
 
-fn check_rate_limits(expensive: bool, config: &Config, session: &mut Session) -> Option<u64> {
-    // TODO: Don't ratelimit per connection
-
+fn check_rate_limits(config: &Config, expensive: bool, session: &mut UserSession) -> Option<u64> {
     let (duration, amount, packet_time, packets) = if expensive {
         (
             Duration::from_secs(60*5),
@@ -515,21 +512,34 @@ fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
     });
 }
 
-struct Session {
-    id: Option<usize>,
+struct UserSession {
     packet_time_cheap: Instant,
     packet_time_expensive: Instant,
     packets_cheap: usize,
     packets_expensive: usize,
+}
+struct Session {
+    id: Option<usize>,
     writer: BufWriter<tokio_io::io::WriteHalf<SslStream<TcpStream>>>
+}
+impl UserSession {
+    fn new() -> UserSession {
+        UserSession {
+            packet_time_cheap: Instant::now(),
+            packet_time_expensive: Instant::now(),
+            packets_cheap: 0,
+            packets_expensive: 0
+        }
+    }
 }
 
 fn handle_client(
-        config: Rc<Config>,
-        conn_id: usize,
-        db: Rc<SqlConnection>,
-        handle: Rc<Handle>,
-        reader: BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
+        config:   Rc<Config>,
+        conn_id:  usize,
+        db:       Rc<SqlConnection>,
+        handle:   Rc<Handle>,
+        reader:   BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
+        users:    Rc<RefCell<HashMap<usize, UserSession>>>,
         sessions: Rc<RefCell<HashMap<usize, Session>>>
     ) {
     macro_rules! close {
@@ -570,18 +580,20 @@ fn handle_client(
                         }
                     }
                     macro_rules! rate_limit {
-                        (expensive) => {
-                            rate_limit!(true);
+                        ($id:expr, expensive) => {
+                            rate_limit!($id, true);
                         };
-                        (cheap) => {
-                            rate_limit!(false);
+                        ($id:expr, cheap) => {
+                            rate_limit!($id, false);
                         };
-                        ($expensive:expr) => {
+                        ($id:expr, $expensive:expr) => {
                             let mut stop = false;
                             {
-                                let mut sessions = sessions.borrow_mut();
-                                let mut session = &mut sessions.get_mut(&conn_id).unwrap();
-                                if let Some(left) = check_rate_limits($expensive, &config, &mut session) {
+                                let mut users = users.borrow_mut();
+                                let user = &mut users.entry($id).or_insert_with(UserSession::new);
+                                if let Some(left) = check_rate_limits(&config, $expensive, user) {
+                                    let mut sessions = sessions.borrow_mut();
+                                    let session = &mut sessions.get_mut(&conn_id).unwrap();
                                     write(&mut session.writer, Packet::RateLimited(left));
                                     stop = true;
                                 }
@@ -593,6 +605,7 @@ fn handle_client(
                                     db,
                                     handle_clone_clone_ugh,
                                     reader,
+                                    users,
                                     sessions
                                 );
 
@@ -608,8 +621,6 @@ fn handle_client(
                     match packet {
                         Packet::Close => { close!(); }
                         Packet::Login(login) => {
-                            rate_limit!(login.password.is_some());
-
                             let mut stmt = db.prepare_cached(
                                 "SELECT id, ban, bot, token, password FROM users WHERE name = ?"
                             ).unwrap();
@@ -709,13 +720,13 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeCreate(attr) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                let id = get_id!();
                                 if !has_perm(
                                     &config,
                                     id,
@@ -763,14 +774,14 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeUpdate(event) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             let attr = event.inner;
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                let id = get_id!();
                                 if !has_perm(
                                     &config,
                                     id,
@@ -826,9 +837,9 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeDelete(event) => {
-                            rate_limit!(cheap);
-
                             let id = get_id!();
+                            rate_limit!(id, cheap);
+
                             if !has_perm(
                                 &config,
                                 id,
@@ -870,14 +881,14 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelCreate(channel) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                let id = get_id!();
                                 if !has_perm(
                                     &config,
                                     id,
@@ -905,7 +916,8 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelUpdate(event) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             let channel = event.inner;
                             if channel.name.len() < config.limit_channel_name_min
@@ -913,7 +925,6 @@ fn handle_client(
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
-                                let id = get_id!();
                                 if let Some(old) = get_channel(&db, channel.id) {
                                     if !has_perm(
                                         &config,
@@ -944,9 +955,9 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelDelete(event) => {
-                            rate_limit!(cheap);
-
                             let id = get_id!();
+                            rate_limit!(id, cheap);
+
                             if let Some(channel) = get_channel(&db, event.id) {
                                 if !has_perm(
                                     &config,
@@ -974,9 +985,9 @@ fn handle_client(
                             }
                         },
                         Packet::MessageList(params) => {
-                            rate_limit!(cheap);
-
                             let id = get_id!();
+                            rate_limit!(id, cheap);
+
                             let channel = get_channel(&db, params.channel);
                             // Cheap trick to break out at any time.
                             loop {
@@ -1061,14 +1072,14 @@ fn handle_client(
                             }
                         },
                         Packet::MessageCreate(msg) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             if msg.text.len() < config.limit_message_min
                                 || msg.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else if let Some(channel) = get_channel(&db, msg.channel) {
                                 let timestamp = Utc::now().timestamp();
-                                let id = get_id!();
                                 let user = get_user(&db, id).unwrap();
 
                                 if !has_perm(
@@ -1100,14 +1111,14 @@ fn handle_client(
                             }
                         },
                         Packet::MessageUpdate(event) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             if event.text.len() < config.limit_message_min
                                 || event.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else if let Some(msg) = get_message(&db, event.id) {
                                 let timestamp = Utc::now().timestamp();
-                                let id = get_id!();
 
                                 if msg.author != id {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1136,10 +1147,10 @@ fn handle_client(
                             }
                         },
                         Packet::MessageDelete(event) => {
-                            rate_limit!(cheap);
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
 
                             if let Some(msg) = get_message(&db, event.id) {
-                                let id = get_id!();
                                 let user = get_user(&db, id).unwrap();
                                 let channel = get_channel(&db, id).unwrap();
 
@@ -1166,9 +1177,9 @@ fn handle_client(
                             }
                         },
                         Packet::UserUpdate(user) => {
-                            rate_limit!(cheap);
-
                             let id = get_id!();
+                            rate_limit!(id, cheap);
+
                             if !has_perm(
                                 &config,
                                 id,
@@ -1240,11 +1251,10 @@ fn handle_client(
                         },
                         Packet::LoginUpdate(login) => {
                             let mut reset_token = login.reset_token;
-                            rate_limit!(reset_token
+                            let id = get_id!();
+                            rate_limit!(id, reset_token
                                         || (login.password_current.is_some()
                                         && login.password_new.is_some()));
-
-                            let id = get_id!();
 
                             if let Some(name) = login.name {
                                 db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
@@ -1300,6 +1310,7 @@ fn handle_client(
                                 db,
                                 handle_clone_clone_ugh,
                                 reader,
+                                users,
                                 sessions
                             );
                             return Ok(());
@@ -1386,6 +1397,7 @@ fn handle_client(
                         db,
                         handle_clone_clone_ugh,
                         reader,
+                        users,
                         sessions
                     );
 
