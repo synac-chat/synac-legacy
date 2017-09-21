@@ -122,6 +122,10 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     println!("Username too long");
                     return None;
                 },
+                common::ERR_MAX_CONN_PER_IP => {
+                    println!("Too many connections made from this IP");
+                    return None;
+                },
                 _ => {
                     println!("The server responded with an invalid error :/");
                     return None;

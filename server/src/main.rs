@@ -48,7 +48,7 @@ struct Config {
 
     limit_requests_cheap_per_10_seconds: u8,
     limit_requests_expensive_per_5_minutes: u8,
-    limit_connections_per_ip: usize,
+    limit_connections_per_ip: u32,
 
     limit_user_name_min: usize,
     limit_user_name_max: usize,
@@ -208,7 +208,7 @@ fn main() {
 
                 limit_requests_cheap_per_10_seconds: 7,
                 limit_requests_expensive_per_5_minutes: 2,
-                limit_connections_per_ip: 5, // TODO
+                limit_connections_per_ip: 128,
 
                 limit_user_name_min: 1,
                 limit_user_name_max: 32,
@@ -242,8 +242,9 @@ fn main() {
     let conn_id  = Rc::new(RefCell::new(0usize));
     let db       = Rc::new(db);
     let handle   = Rc::new(handle);
-    let users    = Rc::new(RefCell::new(HashMap::new()));
+    let ips      = Rc::new(RefCell::new(HashMap::new()));
     let sessions = Rc::new(RefCell::new(HashMap::new()));
+    let users    = Rc::new(RefCell::new(HashMap::new()));
 
     println!("I'm alive!");
 
@@ -254,8 +255,9 @@ fn main() {
         let conn_id_clone  = Rc::clone(&conn_id);
         let db_clone       = Rc::clone(&db);
         let handle_clone   = Rc::clone(&handle);
-        let users_clone    = Rc::clone(&users);
+        let ips_clone      = Rc::clone(&ips);
         let sessions_clone = Rc::clone(&sessions);
+        let users_clone    = Rc::clone(&users);
 
         let accept = ssl.accept_async(conn).map_err(|_| ()).and_then(move |conn| {
             let (reader, writer) = conn.split();
@@ -276,6 +278,15 @@ fn main() {
                 }
             }
 
+            {
+                let mut ips = ips_clone.borrow_mut();
+                let conns = ips.entry(addr.ip()).or_insert(0);
+                if *conns >= config_clone.limit_connections_per_ip {
+                    write(&mut writer, Packet::Err(common::ERR_MAX_CONN_PER_IP));
+                }
+                *conns += 1;
+            }
+
             let my_conn_id = *conn_id_clone.borrow();
             *conn_id_clone.borrow_mut() += 1;
 
@@ -289,9 +300,11 @@ fn main() {
                 my_conn_id,
                 db_clone,
                 handle_clone,
+                addr.ip(),
+                ips_clone,
                 reader,
-                users_clone,
-                sessions_clone
+                sessions_clone,
+                users_clone
             );
 
             Ok(())
@@ -538,13 +551,16 @@ fn handle_client(
         conn_id:  usize,
         db:       Rc<SqlConnection>,
         handle:   Rc<Handle>,
+        ip:       IpAddr,
+        ips:      Rc<RefCell<HashMap<IpAddr, u32>>>,
         reader:   BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
-        users:    Rc<RefCell<HashMap<usize, UserSession>>>,
-        sessions: Rc<RefCell<HashMap<usize, Session>>>
+        sessions: Rc<RefCell<HashMap<usize, Session>>>,
+        users:    Rc<RefCell<HashMap<usize, UserSession>>>
     ) {
     macro_rules! close {
         () => {
             sessions.borrow_mut().remove(&conn_id);
+            *ips.borrow_mut().get_mut(&ip).unwrap() -= 1;
             return Ok(());
         }
     }
@@ -604,9 +620,11 @@ fn handle_client(
                                     conn_id,
                                     db,
                                     handle_clone_clone_ugh,
+                                    ip,
+                                    ips,
                                     reader,
-                                    users,
-                                    sessions
+                                    sessions,
+                                    users
                                 );
 
                                 return Ok(());
@@ -1013,7 +1031,7 @@ fn handle_client(
                                         WHERE channel = ? AND timestamp >=
                                         (SELECT timestamp FROM messages WHERE id = ?)
                                         ORDER BY timestamp
-                                        LIMIT ?",
+                                        LIMIT ?"
                                     ).unwrap();
                                     rows = stmt.query(&[
                                         &(params.channel as i64),
@@ -1026,7 +1044,7 @@ fn handle_client(
                                         WHERE channel = ? AND timestamp <=
                                         (SELECT timestamp FROM messages WHERE id = ?)
                                         ORDER BY timestamp
-                                        LIMIT ?",
+                                        LIMIT ?"
                                     ).unwrap();
                                     rows = stmt.query(&[
                                         &(params.channel as i64),
@@ -1037,7 +1055,7 @@ fn handle_client(
                                     stmt = db.prepare_cached(
                                         "SELECT * FROM
                                         (SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?)
-                                        ORDER BY timestamp",
+                                        ORDER BY timestamp"
                                     ).unwrap();
                                     rows = stmt.query(&[
                                         &(params.channel as i64),
@@ -1309,9 +1327,11 @@ fn handle_client(
                                 conn_id,
                                 db,
                                 handle_clone_clone_ugh,
+                                ip,
+                                ips,
                                 reader,
-                                users,
-                                sessions
+                                sessions,
+                                users
                             );
                             return Ok(());
                         }
@@ -1396,9 +1416,11 @@ fn handle_client(
                         conn_id,
                         db,
                         handle_clone_clone_ugh,
+                        ip,
+                        ips,
                         reader,
-                        users,
-                        sessions
+                        sessions,
+                        users
                     );
 
                     Ok(())
