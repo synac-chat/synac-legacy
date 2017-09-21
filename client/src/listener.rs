@@ -1,5 +1,6 @@
 use *;
 use common::Packet;
+use rusqlite::Connection as SqlConnection;
 use std::io::{self, Read, Write};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -7,7 +8,11 @@ use std::thread;
 use std::time::Duration;
 use termion::cursor;
 
-pub fn listen(session: Arc<Mutex<Option<Session>>>, sent_sender: mpsc::SyncSender<()>) {
+pub fn listen(
+    db: Arc<Mutex<SqlConnection>>,
+    sent_sender: mpsc::SyncSender<()>,
+    session: Arc<Mutex<Option<Session>>>
+) {
     let mut size = true;
     let mut buf = vec![0; 2];
     let mut i = 0;
@@ -84,6 +89,17 @@ pub fn listen(session: Arc<Mutex<Option<Session>>>, sent_sender: mpsc::SyncSende
                                 },
                                 Ok(Packet::MessageDeleteReceive(event)) => {
                                     println!("{}Deleted message: {}", cursor::Restore, event.id);
+                                    to_terminal_bottom();
+                                    flush!();
+                                },
+                                Ok(Packet::LoginSuccess(event)) => {
+                                    db.lock().unwrap().execute(
+                                        "UPDATE servers SET token = ? WHERE ip = ?",
+                                        &[&event.token, &session.addr.to_string()]
+                                    ).unwrap();
+                                },
+                                Ok(Packet::Err(common::ERR_LOGIN_INVALID)) => {
+                                    println!("{}Invalid credentials", cursor::Restore);
                                     to_terminal_bottom();
                                     flush!();
                                 },

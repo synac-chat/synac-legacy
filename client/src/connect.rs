@@ -109,7 +109,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             },
             Ok(Packet::Err(code)) => match code {
                 common::ERR_LOGIN_INVALID |
-                common::ERR_LOGIN_EMPTY => {},
+                common::ERR_MISSING_FIELD => {},
                 common::ERR_LOGIN_BANNED => {
                     println!("Oh noes, you have been banned from this server :(");
                     return None;
@@ -142,16 +142,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
     if id.is_none() {
         print!("Password: ");
         flush!();
-        use termion::input::TermRead;
-        let pass = match io::stdin().read_passwd(&mut io::stdout()) {
-            Ok(Some(some)) => some,
-            Ok(None) => { println!(); return None },
-            Err(err) => {
-                println!("Failed to read password");
-                println!("{}", err);
-                return None;
-            }
-        };
+        let pass = readpass!({ return None; });
         println!();
 
         let packet = Packet::Login(common::Login {
@@ -213,5 +204,5 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         }
     }
     stream.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-    Some(Session::new(id.unwrap(), stream))
+    Some(Session::new(addr, id.unwrap(), stream))
 }

@@ -13,18 +13,18 @@ pub const LIMIT_MESSAGE:      usize = 16384;
 
 pub const LIMIT_MESSAGE_LIST: usize = 64;
 
-pub const ERR_LOGIN_INVALID:      u8 = 0;
-pub const ERR_LOGIN_BANNED:       u8 = 1;
-pub const ERR_LOGIN_EMPTY:        u8 = 2;
-pub const ERR_LOGIN_BOT:          u8 = 3;
-pub const ERR_UNKNOWN_ATTRIBUTE:  u8 = 4;
-pub const ERR_UNKNOWN_CHANNEL:    u8 = 5;
-pub const ERR_UNKNOWN_MESSAGE:    u8 = 6;
-pub const ERR_UNKNOWN_USER:       u8 = 7;
-pub const ERR_LIMIT_REACHED:      u8 = 8;
-pub const ERR_MISSING_PERMISSION: u8 = 9;
-pub const ERR_ATTR_INVALID_POS:   u8 = 10;
-pub const ERR_ATTR_LOCKED_NAME:   u8 = 11;
+pub const ERR_ATTR_INVALID_POS:   u8 = 1;
+pub const ERR_ATTR_LOCKED_NAME:   u8 = 2;
+pub const ERR_LIMIT_REACHED:      u8 = 3;
+pub const ERR_LOGIN_BANNED:       u8 = 4;
+pub const ERR_LOGIN_BOT:          u8 = 5;
+pub const ERR_LOGIN_INVALID:      u8 = 6;
+pub const ERR_MISSING_FIELD:      u8 = 7;
+pub const ERR_MISSING_PERMISSION: u8 = 8;
+pub const ERR_UNKNOWN_ATTRIBUTE:  u8 = 9;
+pub const ERR_UNKNOWN_CHANNEL:    u8 = 10;
+pub const ERR_UNKNOWN_MESSAGE:    u8 = 11;
+pub const ERR_UNKNOWN_USER:       u8 = 12;
 
 pub const PERM_READ:  u8 = 1;
 pub const PERM_WRITE: u8 = 1 << 1;

@@ -38,12 +38,30 @@ macro_rules! readline {
         }
     }
 }
+macro_rules! readpass {
+    ($break:expr) => {
+        {
+            use termion::input::TermRead;
+            match io::stdin().read_passwd(&mut io::stdout()) {
+                Ok(Some(some)) => { println!(); some },
+                Ok(None) => { println!(); $break },
+                Err(err) => {
+                    println!();
+                    println!("Failed to read password");
+                    println!("{}", err);
+                    $break
+                }
+            }
+        }
+    }
+}
 
 mod connect;
 mod listener;
 mod parser;
 
 pub struct Session {
+    addr: SocketAddr,
     attributes: HashMap<usize, common::Attribute>,
     channel: Option<usize>,
     channels: HashMap<usize, common::Channel>,
@@ -53,8 +71,9 @@ pub struct Session {
     users: HashMap<usize, common::User>
 }
 impl Session {
-    pub fn new(id: usize, stream: SslStream<TcpStream>) -> Session {
+    pub fn new(addr: SocketAddr, id: usize, stream: SslStream<TcpStream>) -> Session {
         Session {
+            addr: addr,
             attributes: HashMap::new(),
             channel: None,
             channels: HashMap::new(),
@@ -75,13 +94,14 @@ fn main() {
             return;
         }
     };
-
     db.execute("CREATE TABLE IF NOT EXISTS servers (
                     ip      TEXT NOT NULL UNIQUE,
                     key     BLOB NOT NULL,
                     token   TEXT
                 )", &[])
         .expect("Couldn't create SQLite table");
+
+    let db = Arc::new(Mutex::new(db));
 
     #[cfg(unix)]
     let mut nick = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
@@ -94,7 +114,6 @@ fn main() {
         .expect("Failed to create SSL connector D:")
         .build();
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
-    let session_clone = Arc::clone(&session);
 
     let _screen = AlternateScreen::from(io::stdout());
 
@@ -108,8 +127,10 @@ fn main() {
 
     let (sent_sender, sent_receiver) = mpsc::sync_channel(0);
 
+    let db_clone = Arc::clone(&db);
+    let session_clone = Arc::clone(&session);
     thread::spawn(move || {
-        listener::listen(session_clone, sent_sender);
+        listener::listen(db_clone, sent_sender, session_clone);
     });
 
     let mut editor = rustyline::Editor::<()>::new();
@@ -171,7 +192,46 @@ fn main() {
                 "nick" => {
                     usage!(1, "nick <name>");
                     nick = args.remove(0);
+
+                    let mut session = session.lock().unwrap();
+                    if let Some(ref mut session) = *session {
+                        let packet = Packet::LoginUpdate(common::LoginUpdate {
+                            name: Some(nick.clone()),
+                            password_current: None,
+                            password_new: None,
+                            reset_token: false
+                        });
+                        if let Err(err) = common::write(&mut session.stream, &packet) {
+                            println!("Failed to rename you on the server");
+                            println!("{}", err);
+                        }
+                    }
+
                     println!("Your name is now {}", nick);
+                },
+                "passwd" => {
+                    usage!(0, "passwd");
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+
+                    print!("Current password: ");
+                    flush!();
+                    let current = readpass!({ continue; });
+                    print!("New password: ");
+                    flush!();
+                    let new = readpass!({ continue; });
+
+                    let packet = Packet::LoginUpdate(common::LoginUpdate {
+                        name: None,
+                        password_current: Some(current),
+                        password_new: Some(new),
+                        reset_token: true // Doesn't actually matter in this case
+                    });
+                    if let Err(err) = common::write(&mut session.stream, &packet) {
+                        println!("Failed to send password update");
+                        println!("{}", err);
+                    }
+                    let _ = sent_receiver.recv_timeout(Duration::from_secs(10));
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
@@ -180,7 +240,7 @@ fn main() {
                         println!("Please disconnect first");
                         continue;
                     }
-                    *session = connect::connect(&db, &nick, &args[0], &mut editor, &ssl);
+                    *session = connect::connect(&db.lock().unwrap(), &nick, &args[0], &mut editor, &ssl);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -200,7 +260,7 @@ fn main() {
                             continue;
                         }
                     };
-                    db.execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
+                    db.lock().unwrap().execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 "create" => {
                     usage_min!(2, "create <\"attribute\"/\"channel\"> <name> [data]");
@@ -637,9 +697,7 @@ fn main() {
             }
         }
         // Could only happen if message was sent
-        if let Err(mpsc::RecvTimeoutError::Timeout) = sent_receiver.recv_timeout(Duration::from_secs(2)) {
-            println!("Failed to verify message was received...");
-        }
+        let _ = sent_receiver.recv_timeout(Duration::from_secs(2));
     }
 }
 

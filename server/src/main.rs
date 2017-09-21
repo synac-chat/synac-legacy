@@ -543,6 +543,7 @@ fn handle_client(
                                 } else if row_bot == login.bot {
                                      if let Some(password) = login.password {
                                         let valid = attempt_or!(bcrypt::verify(&password, &row_password), {
+                                            eprintln!("Failed to verify password");
                                             close!();
                                         });
                                         if valid {
@@ -573,7 +574,7 @@ fn handle_client(
                                             reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
                                         }
                                     } else {
-                                        reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
+                                        reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
                                     }
                                } else {
                                     reply = Some(Packet::Err(common::ERR_LOGIN_BOT));
@@ -618,7 +619,7 @@ fn handle_client(
                                     broadcast = true;
                                 }
                             } else {
-                                reply = Some(Packet::Err(common::ERR_LOGIN_EMPTY));
+                                reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
                             }
                         },
                         Packet::AttributeCreate(attr) => {
@@ -1111,8 +1112,17 @@ fn handle_client(
                                         "UPDATE users SET attributes = ? WHERE id = ?",
                                         &[&from_list(&user.attributes), &(user.id as i64)]
                                     ).unwrap();
+                                    reply = Some(Packet::UserReceive(common::UserReceive {
+                                        inner: common::User {
+                                            attributes: user.attributes,
+                                            ban: old.ban,
+                                            bot: old.bot,
+                                            id: user.id,
+                                            name: old.name
+                                        }
+                                    }));
+                                    broadcast = true;
                                 } else {
-                                    println!("{}", correct);
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 }
                             } else {
@@ -1120,13 +1130,52 @@ fn handle_client(
                             }
 
                         },
-                        // Packet::LoginUpdate(login) => {
-                        //     let id = get_id!();
+                        Packet::LoginUpdate(login) => {
+                            let id = get_id!();
 
-                        //     if let Some(name) = login.name {
-                        //         db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
-                        //     }
-                        // },
+                            if let Some(name) = login.name {
+                                db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
+                            }
+                            let mut reset_token = login.reset_token;
+                            if let Some(current) = login.password_current {
+                                if let Some(new) = login.password_new {
+                                    let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();
+                                    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+                                    let password: String = rows.next().unwrap().unwrap().get(0);
+                                    let valid = attempt_or!(bcrypt::verify(&current, &password), {
+                                        eprintln!("Failed to verify password");
+                                        close!();
+                                    });
+                                    if valid {
+                                        let hash = attempt_or!(bcrypt::hash(&new, bcrypt::DEFAULT_COST), {
+                                            eprintln!("Failed to hash password");
+                                            close!();
+                                        });
+                                        db.execute("UPDATE users SET password = ? WHERE id = ?", &[&hash, &(id as i64)])
+                                            .unwrap();
+                                        reset_token = true;
+                                    } else {
+                                        reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
+                                        reset_token = false;
+                                    }
+                                } else {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
+                                    reset_token = false;
+                                }
+                            }
+                            if reset_token {
+                                let token = attempt_or!(gen_token(), {
+                                    eprintln!("Failed to generate random token");
+                                    close!();
+                                });
+                                db.execute("UPDATE users SET token = ? WHERE id = ?", &[&token, &(id as i64)]).unwrap();
+                                reply = Some(Packet::LoginSuccess(common::LoginSuccess {
+                                    created: false,
+                                    id: id,
+                                    token: token
+                                }));
+                            }
+                        },
                         _ => unimplemented!()
                     }
 
