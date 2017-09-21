@@ -143,7 +143,6 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         print!("Password: ");
         flush!();
         let pass = readpass!({ return None; });
-        println!();
 
         let packet = Packet::Login(common::Login {
             bot: false,

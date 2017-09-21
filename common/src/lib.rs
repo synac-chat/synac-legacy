@@ -202,8 +202,9 @@ macro_rules! packet {
         #[derive(Serialize, Deserialize, Debug)]
         #[serde(/*tag = "type",*/ rename_all = "snake_case")]
         pub enum Packet {
-            Err(u8),
             Close,
+            Err(u8),
+            RateLimited(u64),
             $($type($type),)+
         }
     }

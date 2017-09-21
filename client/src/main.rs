@@ -211,26 +211,31 @@ fn main() {
                 },
                 "passwd" => {
                     usage!(0, "passwd");
-                    let mut session = session.lock().unwrap();
-                    let session = require_session!(session);
+                    {
+                        let mut session = session.lock().unwrap();
+                        let session = require_session!(session);
 
-                    print!("Current password: ");
-                    flush!();
-                    let current = readpass!({ continue; });
-                    print!("New password: ");
-                    flush!();
-                    let new = readpass!({ continue; });
+                        print!("Current password: ");
+                        flush!();
+                        let current = readpass!({ continue; });
+                        print!("New password: ");
+                        flush!();
+                        let new = readpass!({ continue; });
 
-                    let packet = Packet::LoginUpdate(common::LoginUpdate {
-                        name: None,
-                        password_current: Some(current),
-                        password_new: Some(new),
-                        reset_token: true // Doesn't actually matter in this case
-                    });
-                    if let Err(err) = common::write(&mut session.stream, &packet) {
-                        println!("Failed to send password update");
-                        println!("{}", err);
+                        let packet = Packet::LoginUpdate(common::LoginUpdate {
+                            name: None,
+                            password_current: Some(current),
+                            password_new: Some(new),
+                            reset_token: true // Doesn't actually matter in this case
+                        });
+                        if let Err(err) = common::write(&mut session.stream, &packet) {
+                            println!("Failed to send password update");
+                            println!("{}", err);
+                            continue;
+                        }
                     }
+                    to_terminal_bottom();
+                    flush!();
                     let _ = sent_receiver.recv_timeout(Duration::from_secs(10));
                 },
                 "connect" => {
@@ -431,10 +436,10 @@ fn main() {
                                     }
                                 };
                                 if let Some(attribute) = session.attributes.get(&id) {
-                                    // if attribute.pos == 0 {
-                                    //     println!("Can't assign that attribute");
-                                    //     continue;
-                                    // }
+                                    if attribute.pos == 0 {
+                                        println!("Can't assign that attribute");
+                                        continue;
+                                    }
                                     if add {
                                         println!("Added: {}", attribute.name);
                                         attributes.push(id);

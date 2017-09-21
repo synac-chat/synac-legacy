@@ -24,6 +24,7 @@ use std::io::{Read, Write, BufReader, BufWriter};
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use chrono::Utc;
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::{Core, Handle};
@@ -44,6 +45,11 @@ macro_rules! attempt_or {
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
     owner_id: usize,
+
+    limit_requests_cheap_per_10_seconds: u8,
+    limit_requests_expensive_per_5_minutes: u8,
+    limit_connections_per_ip: usize,
+
     limit_user_name_min: usize,
     limit_user_name_max: usize,
     limit_channel_name_min: usize,
@@ -199,6 +205,11 @@ fn main() {
         } else {
             config = Config {
                 owner_id: 1,
+
+                limit_requests_cheap_per_10_seconds: 7,
+                limit_requests_expensive_per_5_minutes: 2,
+                limit_connections_per_ip: 5, // TODO
+
                 limit_user_name_min: 1,
                 limit_user_name_max: 32,
                 limit_channel_name_min: 1,
@@ -268,6 +279,10 @@ fn main() {
 
             sessions_clone.borrow_mut().insert(my_conn_id, Session {
                 id: None,
+                packet_time_cheap: Instant::now(),
+                packet_time_expensive: Instant::now(),
+                packets_cheap: 0,
+                packets_expensive: 0,
                 writer: writer
             });
 
@@ -460,6 +475,40 @@ fn get_message_by_fields(row: &SqlRow) -> common::Message {
     }
 }
 
+fn check_rate_limits(expensive: bool, config: &Config, session: &mut Session) -> Option<u64> {
+    // TODO: Don't ratelimit per connection
+
+    let (duration, amount, packet_time, packets) = if expensive {
+        (
+            Duration::from_secs(60*5),
+            config.limit_requests_expensive_per_5_minutes,
+            &mut session.packet_time_expensive,
+            &mut session.packets_expensive
+        )
+    } else {
+        (
+            Duration::from_secs(10),
+            config.limit_requests_cheap_per_10_seconds,
+            &mut session.packet_time_cheap,
+            &mut session.packets_cheap
+        )
+    };
+    // TODO: Utilize const fn for Duration when stable
+
+    let now = Instant::now();
+    let future = *packet_time + duration;
+    if now >= future {
+        *packet_time = now;
+        *packets = 0;
+    } else {
+        if *packets >= amount as usize {
+            return Some((future - now).as_secs());
+        }
+        *packets += 1;
+    }
+    None
+}
+
 fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
     attempt_or!(common::write(writer, &packet), {
         eprintln!("Failed to send reply");
@@ -468,6 +517,10 @@ fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
 
 struct Session {
     id: Option<usize>,
+    packet_time_cheap: Instant,
+    packet_time_expensive: Instant,
+    packets_cheap: usize,
+    packets_expensive: usize,
     writer: BufWriter<tokio_io::io::WriteHalf<SslStream<TcpStream>>>
 }
 
@@ -516,6 +569,37 @@ fn handle_client(
                             }
                         }
                     }
+                    macro_rules! rate_limit {
+                        (expensive) => {
+                            rate_limit!(true);
+                        };
+                        (cheap) => {
+                            rate_limit!(false);
+                        };
+                        ($expensive:expr) => {
+                            let mut stop = false;
+                            {
+                                let mut sessions = sessions.borrow_mut();
+                                let mut session = &mut sessions.get_mut(&conn_id).unwrap();
+                                if let Some(left) = check_rate_limits($expensive, &config, &mut session) {
+                                    write(&mut session.writer, Packet::RateLimited(left));
+                                    stop = true;
+                                }
+                            }
+                            if stop {
+                                handle_client(
+                                    config,
+                                    conn_id,
+                                    db,
+                                    handle_clone_clone_ugh,
+                                    reader,
+                                    sessions
+                                );
+
+                                return Ok(());
+                            }
+                        }
+                    }
 
                     let mut broadcast = false;
                     let mut reply = None;
@@ -524,6 +608,8 @@ fn handle_client(
                     match packet {
                         Packet::Close => { close!(); }
                         Packet::Login(login) => {
+                            rate_limit!(login.password.is_some());
+
                             let mut stmt = db.prepare_cached(
                                 "SELECT id, ban, bot, token, password FROM users WHERE name = ?"
                             ).unwrap();
@@ -623,6 +709,8 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeCreate(attr) => {
+                            rate_limit!(cheap);
+
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
@@ -675,6 +763,8 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeUpdate(event) => {
+                            rate_limit!(cheap);
+
                             let attr = event.inner;
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
@@ -736,6 +826,8 @@ fn handle_client(
                             }
                         },
                         Packet::AttributeDelete(event) => {
+                            rate_limit!(cheap);
+
                             let id = get_id!();
                             if !has_perm(
                                 &config,
@@ -778,6 +870,8 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelCreate(channel) => {
+                            rate_limit!(cheap);
+
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
@@ -811,6 +905,8 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelUpdate(event) => {
+                            rate_limit!(cheap);
+
                             let channel = event.inner;
                             if channel.name.len() < config.limit_channel_name_min
                                 || channel.name.len() > config.limit_channel_name_max
@@ -848,6 +944,8 @@ fn handle_client(
                             }
                         },
                         Packet::ChannelDelete(event) => {
+                            rate_limit!(cheap);
+
                             let id = get_id!();
                             if let Some(channel) = get_channel(&db, event.id) {
                                 if !has_perm(
@@ -876,9 +974,11 @@ fn handle_client(
                             }
                         },
                         Packet::MessageList(params) => {
-                            // Cheap trick to break out at any time.
+                            rate_limit!(cheap);
+
                             let id = get_id!();
                             let channel = get_channel(&db, params.channel);
+                            // Cheap trick to break out at any time.
                             loop {
                                 let mut stmt;
                                 let mut rows;
@@ -961,6 +1061,8 @@ fn handle_client(
                             }
                         },
                         Packet::MessageCreate(msg) => {
+                            rate_limit!(cheap);
+
                             if msg.text.len() < config.limit_message_min
                                 || msg.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
@@ -998,6 +1100,8 @@ fn handle_client(
                             }
                         },
                         Packet::MessageUpdate(event) => {
+                            rate_limit!(cheap);
+
                             if event.text.len() < config.limit_message_min
                                 || event.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
@@ -1032,6 +1136,8 @@ fn handle_client(
                             }
                         },
                         Packet::MessageDelete(event) => {
+                            rate_limit!(cheap);
+
                             if let Some(msg) = get_message(&db, event.id) {
                                 let id = get_id!();
                                 let user = get_user(&db, id).unwrap();
@@ -1060,6 +1166,8 @@ fn handle_client(
                             }
                         },
                         Packet::UserUpdate(user) => {
+                            rate_limit!(cheap);
+
                             let id = get_id!();
                             if !has_perm(
                                 &config,
@@ -1131,12 +1239,16 @@ fn handle_client(
 
                         },
                         Packet::LoginUpdate(login) => {
+                            let mut reset_token = login.reset_token;
+                            rate_limit!(reset_token
+                                        || (login.password_current.is_some()
+                                        && login.password_new.is_some()));
+
                             let id = get_id!();
 
                             if let Some(name) = login.name {
                                 db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
                             }
-                            let mut reset_token = login.reset_token;
                             if let Some(current) = login.password_current {
                                 if let Some(new) = login.password_new {
                                     let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();

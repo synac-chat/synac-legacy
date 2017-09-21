@@ -98,10 +98,13 @@ pub fn listen(
                                         &[&event.token, &session.addr.to_string()]
                                     ).unwrap();
                                 },
-                                Ok(Packet::Err(common::ERR_LOGIN_INVALID)) => {
-                                    println!("{}Invalid credentials", cursor::Restore);
+                                Ok(Packet::RateLimited(time)) => {
+                                    println!("{}\rSlow down! You may try again in {} seconds.", cursor::Restore, time);
                                     to_terminal_bottom();
                                     flush!();
+                                }
+                                Ok(Packet::Err(common::ERR_LOGIN_INVALID)) => {
+                                    println!("{}Invalid credentials", cursor::Restore);
                                 },
                                 Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
                                     println!("{}It appears this channel was deleted", cursor::Restore);
@@ -139,14 +142,13 @@ pub fn listen(
                                 Err(err) => {
                                     println!("Failed to deserialize message!");
                                     println!("{}", err);
-                                    continue;
                                 }
                             };
+                            let _ = sent_sender.try_send(());
                             size = true;
                             buf = vec![0; 2];
                             i = 0;
                         }
-                        let _ = sent_sender.try_send(());
                     }
                 },
                 Err(_) => {}
