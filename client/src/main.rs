@@ -33,7 +33,7 @@ macro_rules! readline {
             Err(ReadlineError::Interrupted) => $break,
             Err(err) => {
                 println!("Couldn't read line: {}", err);
-                $break;
+                $break
             }
         }
     }
@@ -286,11 +286,9 @@ fn main() {
                         "attribute" => {
                             usage_max!(3, "create attribute <name> [data]");
                             let (mut allow, mut deny) = (0, 0);
-                            if args.len() == 3 {
-                                if !from_perm_string(&*args[2], &mut allow, &mut deny) {
-                                    println!("Invalid permission string");
-                                    continue;
-                                }
+                            if args.len() == 3 && !from_perm_string(&*args[2], &mut allow, &mut deny) {
+                                println!("Invalid permission string");
+                                continue;
                             }
                             let max = session.attributes.values().max_by_key(|item| item.pos);
                             Packet::AttributeCreate(common::AttributeCreate {

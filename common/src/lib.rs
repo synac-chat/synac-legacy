@@ -240,7 +240,7 @@ packet! {
 pub fn serialize(packet: &Packet) -> Result<Vec<u8>, rmps::encode::Error> {
     rmps::to_vec(&packet)
 }
-pub fn deserialize<'a>(buf: &'a [u8]) -> Result<Packet, rmps::decode::Error> {
+pub fn deserialize(buf: &[u8]) -> Result<Packet, rmps::decode::Error> {
     rmps::from_slice(buf)
 }
 pub fn deserialize_stream<T: io::Read>(buf: T) -> Result<Packet, rmps::decode::Error> {
@@ -296,7 +296,7 @@ pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Box<st
     Ok(())
 }
 
-pub fn perm_apply_iter<'a, I: Iterator<Item = (u8, u8)>>(into: &mut u8, attributes: &mut I) {
+pub fn perm_apply_iter<I: Iterator<Item = (u8, u8)>>(into: &mut u8, attributes: &mut I) {
     // Expects attributes to be sorted
     for attribute in attributes {
         perm_apply(into, attribute);

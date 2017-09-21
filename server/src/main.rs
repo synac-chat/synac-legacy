@@ -744,50 +744,48 @@ fn handle_client(
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                common::PERM_MANAGE_ATTRIBUTES
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                             } else {
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                    common::PERM_MANAGE_ATTRIBUTES
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                let (count, max): (i64, i64) = db.query_row(
+                                    "SELECT COUNT(*), MAX(pos) FROM attributes",
+                                    &[],
+                                    |row| (row.get(0), row.get(1))
+                                ).unwrap();
+
+                                if count as usize + 1 > config.limit_attribute_amount_max {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                } else if attr.pos == 0 || attr.pos > max as usize + 1 {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
                                 } else {
-                                    let (count, max): (i64, i64) = db.query_row(
-                                        "SELECT COUNT(*), MAX(pos) FROM attributes",
-                                        &[],
-                                        |row| (row.get(0), row.get(1))
+                                    db.execute(
+                                        "UPDATE attributes SET pos = pos + 1 WHERE pos >= ?",
+                                        &[&(attr.pos as i64)]
+                                    ).unwrap();
+                                    db.execute(
+                                        "INSERT INTO attributes (allow, deny, name, pos, unassignable)
+                                        VALUES (?, ?, ?, ?, ?)",
+                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64),
+                                        &attr.unassignable]
                                     ).unwrap();
 
-                                    if count as usize + 1 > config.limit_attribute_amount_max {
-                                        reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                                    } else if attr.pos == 0 || attr.pos > max as usize + 1 {
-                                        reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
-                                    } else {
-                                        db.execute(
-                                            "UPDATE attributes SET pos = pos + 1 WHERE pos >= ?",
-                                            &[&(attr.pos as i64)]
-                                        ).unwrap();
-                                        db.execute(
-                                            "INSERT INTO attributes (allow, deny, name, pos, unassignable)
-                                            VALUES (?, ?, ?, ?, ?)",
-                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64),
-                                            &attr.unassignable]
-                                        ).unwrap();
-
-                                        reply = Some(Packet::AttributeReceive(common::AttributeReceive {
-                                            inner: common::Attribute {
-                                                allow: attr.allow,
-                                                deny: attr.deny,
-                                                id: db.last_insert_rowid() as usize,
-                                                name: attr.name,
-                                                pos: attr.pos,
-                                                unassignable: attr.unassignable
-                                            },
-                                            new: true
-                                        }));
-                                        broadcast = true;
-                                    }
+                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
+                                        inner: common::Attribute {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: db.last_insert_rowid() as usize,
+                                            name: attr.name,
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
+                                        },
+                                        new: true
+                                    }));
+                                    broadcast = true;
                                 }
                             }
                         },
@@ -799,58 +797,56 @@ fn handle_client(
                             if attr.name.len() < config.limit_attribute_name_min
                                 || attr.name.len() > config.limit_attribute_name_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else {
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                    common::PERM_MANAGE_ATTRIBUTES
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else if let Some(old) = get_attribute(&db, attr.id) {
-                                    let max: i64 = db.query_row(
-                                        "SELECT MAX(pos) FROM attributes",
-                                        &[],
-                                        |row| row.get(0)
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                common::PERM_MANAGE_ATTRIBUTES
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                            } else if let Some(old) = get_attribute(&db, attr.id) {
+                                let max: i64 = db.query_row(
+                                    "SELECT MAX(pos) FROM attributes",
+                                    &[],
+                                    |row| row.get(0)
+                                ).unwrap();
+
+                                if (attr.pos == 0 && old.pos != 0) || attr.pos > max as usize {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                                } else if attr.pos == 0 && attr.name != old.name {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
+                                } else {
+                                    if attr.pos > old.pos {
+                                        db.execute(
+                                            "UPDATE attributes SET pos = pos - 1 WHERE pos > ? AND pos <= ?",
+                                            &[&(old.pos as i64), &(attr.pos as i64)]
+                                        ).unwrap();
+                                    } else if attr.pos < old.pos {
+                                        db.execute(
+                                            "UPDATE attributes SET pos = pos + 1 WHERE pos >= ? AND pos < ?",
+                                            &[&(attr.pos as i64), &(old.pos as i64)]
+                                        ).unwrap();
+                                    }
+                                    db.execute(
+                                        "UPDATE attributes SET
+                                        allow = ?, deny = ?, name = ?, pos = ?, unassignable = ?
+                                        WHERE id = ?",
+                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &attr.unassignable,
+                                        &(attr.id as i64)]
                                     ).unwrap();
 
-                                    if (attr.pos == 0 && old.pos != 0) || attr.pos > max as usize {
-                                        reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
-                                    } else if attr.pos == 0 && attr.name != old.name {
-                                        reply = Some(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
-                                    } else {
-                                        if attr.pos > old.pos {
-                                            db.execute(
-                                                "UPDATE attributes SET pos = pos - 1 WHERE pos > ? AND pos <= ?",
-                                                &[&(old.pos as i64), &(attr.pos as i64)]
-                                            ).unwrap();
-                                        } else if attr.pos < old.pos {
-                                            db.execute(
-                                                "UPDATE attributes SET pos = pos + 1 WHERE pos >= ? AND pos < ?",
-                                                &[&(attr.pos as i64), &(old.pos as i64)]
-                                            ).unwrap();
-                                        }
-                                        db.execute(
-                                            "UPDATE attributes SET
-                                            allow = ?, deny = ?, name = ?, pos = ?, unassignable = ?
-                                            WHERE id = ?",
-                                            &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &attr.unassignable,
-                                            &(attr.id as i64)]
-                                        ).unwrap();
-
-                                        reply = Some(Packet::AttributeReceive(common::AttributeReceive {
-                                            inner: common::Attribute {
-                                                allow: attr.allow,
-                                                deny: attr.deny,
-                                                id: attr.id,
-                                                name: attr.name,
-                                                pos: attr.pos,
-                                                unassignable: attr.unassignable
-                                            },
-                                            new: true
-                                        }));
-                                        broadcast = true;
-                                    }
+                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
+                                        inner: common::Attribute {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: attr.id,
+                                            name: attr.name,
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
+                                        },
+                                        new: true
+                                    }));
+                                    broadcast = true;
                                 }
                             }
                         },
@@ -906,31 +902,29 @@ fn handle_client(
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                common::PERM_MANAGE_CHANNELS
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                             } else {
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                    common::PERM_MANAGE_CHANNELS
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    db.execute(
-                                        "INSERT INTO channels (name) VALUES (?)",
-                                        &[&channel.name]
-                                    ).unwrap();
-                                    let channel_id = db.last_insert_rowid() as usize;
-                                    insert_channel_overrides(&db, channel_id, &channel.overrides);
+                                db.execute(
+                                    "INSERT INTO channels (name) VALUES (?)",
+                                    &[&channel.name]
+                                ).unwrap();
+                                let channel_id = db.last_insert_rowid() as usize;
+                                insert_channel_overrides(&db, channel_id, &channel.overrides);
 
-                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                        inner: common::Channel {
-                                            overrides:  channel.overrides,
-                                            id: channel_id,
-                                            name: channel.name
-                                        }
-                                    }));
-                                    broadcast = true;
-                                }
+                                reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                    inner: common::Channel {
+                                        overrides:  channel.overrides,
+                                        id: channel_id,
+                                        name: channel.name
+                                    }
+                                }));
+                                broadcast = true;
                             }
                         },
                         Packet::ChannelUpdate(event) => {
@@ -942,33 +936,31 @@ fn handle_client(
                                 || channel.name.len() > config.limit_channel_name_max
                                 || channel.overrides.len() > config.limit_attribute_amount_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else {
-                                if let Some(old) = get_channel(&db, channel.id) {
-                                    if !has_perm(
-                                        &config,
-                                        id,
-                                        calculate_permissions_by_user(&db, id, &old.overrides).unwrap(),
-                                        common::PERM_MANAGE_CHANNELS
-                                    ) {
-                                        reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                    } else {
-                                        db.execute(
-                                            "UPDATE channels SET name = ? WHERE id = ?",
-                                            &[&channel.name, &(channel.id as i64)]
-                                        ).unwrap();
-                                        if !event.keep_overrides {
-                                            insert_channel_overrides(&db, channel.id, &channel.overrides);
-                                        }
-
-                                        reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                            inner: common::Channel {
-                                                overrides:  channel.overrides,
-                                                id: channel.id,
-                                                name: channel.name
-                                            }
-                                        }));
-                                        broadcast = true;
+                            } else if let Some(old) = get_channel(&db, channel.id) {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, &old.overrides).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "UPDATE channels SET name = ? WHERE id = ?",
+                                        &[&channel.name, &(channel.id as i64)]
+                                    ).unwrap();
+                                    if !event.keep_overrides {
+                                        insert_channel_overrides(&db, channel.id, &channel.overrides);
                                     }
+
+                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                        inner: common::Channel {
+                                            overrides:  channel.overrides,
+                                            id: channel.id,
+                                            name: channel.name
+                                        }
+                                    }));
+                                    broadcast = true;
                                 }
                             }
                         },
@@ -1209,12 +1201,12 @@ fn handle_client(
                                 let mut changed = Vec::new();
 
                                 for attr in &user.attributes {
-                                    if !old.attributes.contains(&attr) {
+                                    if !old.attributes.contains(attr) {
                                         changed.push(*attr);
                                     }
                                 }
                                 for attr in &old.attributes {
-                                    if !user.attributes.contains(&attr) {
+                                    if !user.attributes.contains(attr) {
                                         changed.push(*attr);
                                     }
                                 }
