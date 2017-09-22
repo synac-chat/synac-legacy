@@ -7,58 +7,27 @@ extern crate common;
 use common::Packet;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream};
 use rusqlite::Connection as SqlConnection;
-use rustyline::error::ReadlineError;
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use termion::color;
-use termion::cursor;
-use termion::screen::AlternateScreen;
 
-macro_rules! flush {
-    () => {
-        io::stdout().flush().unwrap();
-    }
-}
-macro_rules! readline {
-    ($editor:expr, $prompt:expr, $break:expr) => {
-        match $editor.readline($prompt) {
-            Ok(ok) => ok,
-            Err(ReadlineError::Eof) |
-            Err(ReadlineError::Interrupted) => $break,
-            Err(err) => {
-                println!("Couldn't read line: {}", err);
-                $break
-            }
-        }
-    }
-}
-macro_rules! readpass {
-    ($break:expr) => {
-        {
-            use termion::input::TermRead;
-            match io::stdin().read_passwd(&mut io::stdout()) {
-                Ok(Some(some)) => { println!(); some },
-                Ok(None) => { println!(); $break },
-                Err(err) => {
-                    println!();
-                    println!("Failed to read password");
-                    println!("{}", err);
-                    $break
-                }
-            }
-        }
-    }
-}
-
+mod frontend_minimal;
 mod connect;
 mod listener;
 mod parser;
+
+use frontend_minimal as frontend;
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum LogEntryId {
+    Message(usize),
+    None,
+    Sending
+}
 
 pub struct Session {
     addr: SocketAddr,
@@ -86,6 +55,30 @@ impl Session {
 }
 
 fn main() {
+    let screen = Arc::new(frontend::Screen::new());
+
+    // See https://github.com/rust-lang/rust/issues/35853
+    macro_rules! println {
+        () => { screen.log(String::new()); };
+        ($($arg:expr),*) => { screen.log(format!($($arg),*)); };
+    }
+    macro_rules! readline {
+        ($break:block) => {
+            match screen.readline() {
+                Ok(ok) => ok,
+                Err(_) => $break
+            }
+        }
+    }
+    macro_rules! readpass {
+        ($break:block) => {
+            match screen.readpass() {
+                Ok(ok) => ok,
+                Err(_) => $break
+            }
+        }
+    }
+
     let db = match SqlConnection::open("data.sqlite") {
         Ok(ok) => ok,
         Err(err) => {
@@ -115,9 +108,7 @@ fn main() {
         .build();
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
 
-    let _screen = AlternateScreen::from(io::stdout());
-
-    println!("{}Welcome, {}", cursor::Goto(1, 1), nick);
+    println!("Welcome, {}", nick);
     println!("To quit, type /quit");
     println!("To change your name, type");
     println!("/nick <name>");
@@ -126,18 +117,18 @@ fn main() {
     println!();
 
     let (sent_sender, sent_receiver) = mpsc::sync_channel(0);
+    let (stop_sender, stop_receiver) = mpsc::channel();
 
-    let db_clone = Arc::clone(&db);
+    let db_clone      = Arc::clone(&db);
+    let screen_clone  = Arc::clone(&screen);
     let session_clone = Arc::clone(&session);
-    thread::spawn(move || {
-        listener::listen(db_clone, sent_sender, session_clone);
+    let thread = thread::spawn(move || {
+        listener::listen(db_clone, screen_clone, sent_sender, session_clone, stop_receiver);
     });
 
     let mut editor = rustyline::Editor::<()>::new();
     loop {
-        to_terminal_bottom();
-        let input = readline!(editor, "> ", { break; });
-        print!("{}", cursor::Restore);
+        let input = readline!({ break; });
         if input.is_empty() {
             continue;
         }
@@ -215,11 +206,9 @@ fn main() {
                         let mut session = session.lock().unwrap();
                         let session = require_session!(session);
 
-                        print!("Current password: ");
-                        flush!();
+                        println!("Current password: ");
                         let current = readpass!({ continue; });
-                        print!("New password: ");
-                        flush!();
+                        println!("New password: ");
                         let new = readpass!({ continue; });
 
                         let packet = Packet::LoginUpdate(common::LoginUpdate {
@@ -234,8 +223,6 @@ fn main() {
                             continue;
                         }
                     }
-                    to_terminal_bottom();
-                    flush!();
                     let _ = sent_receiver.recv_timeout(Duration::from_secs(10));
                 },
                 "connect" => {
@@ -245,7 +232,7 @@ fn main() {
                         println!("Please disconnect first");
                         continue;
                     }
-                    *session = connect::connect(&db.lock().unwrap(), &nick, &args[0], &mut editor, &ssl);
+                    *session = connect::connect(&db.lock().unwrap(), &args[0], &nick, &screen, &ssl);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -326,28 +313,21 @@ fn main() {
                             println!("Editing: {}", attribute.name);
                             println!("(Press enter to keep current value)");
                             println!();
+                            println!("Name [{}]: ", attribute.name);
 
-                            let name = readline!(editor,
-                                &format!("Name [{}]: ", attribute.name),
-                                { continue; }
-                            );
+                            let name = readline!({ continue; });
                             let mut name = name.trim();
                             if name.is_empty() { name = &attribute.name };
-                            let perms = readline!(
-                                editor,
-                                &format!("Permission [{}]: ", to_perm_string(allow, deny)),
-                                { continue; }
-                            );
+
+                            println!("Permission [{}]: ", to_perm_string(allow, deny));
+                            let perms = readline!({ continue; });
                             if !from_perm_string(&perms, &mut allow, &mut deny) {
                                 println!("Invalid permission string");
                                 continue;
                             }
-                            println!("{} {}", allow, deny);
-                            let pos = readline!(
-                                editor,
-                                &format!("Position [{}]: ", attribute.pos),
-                                { continue; }
-                            );
+
+                            println!("Position [{}]: ", attribute.pos);
+                            let pos = readline!({ continue; });
                             let pos = pos.trim();
                             let pos = if pos.is_empty() {
                                 attribute.pos
@@ -377,11 +357,8 @@ fn main() {
                             println!("(Press enter to keep current value)");
                             println!();
 
-                            let name = readline!(
-                                editor,
-                                &format!("Name [{}]: ", channel.name),
-                                { continue; }
-                            );
+                            println!("Name [{}]: ", channel.name);
+                            let name = readline!({ continue; });
                             let mut name = name.trim();
                             if name.is_empty() { name = &channel.name }
                             Some(Packet::ChannelUpdate(common::ChannelUpdate {
@@ -404,11 +381,7 @@ fn main() {
                                 println!("Attributes: [{}]", result);
                                 println!("Commands: add, remove, quit");
 
-                                let line = readline!(
-                                    editor,
-                                    "> ",
-                                    { break; }
-                                );
+                                let line = readline!({ break; });
 
                                 let parts = parser::parse(&line);
                                 if parts.is_empty() { continue; }
@@ -443,7 +416,10 @@ fn main() {
                                         attributes.push(id);
                                     } else {
                                         println!("Removed: {}", attribute.name);
-                                        attributes.retain(|item| *item != id);
+                                        let pos = attributes.iter().position(|item| *item == id);
+                                        if let Some(pos) = pos {
+                                            attributes.remove(pos);
+                                        }
                                         // TODO remove_item once stable
                                     }
                                 } else {
@@ -631,7 +607,7 @@ fn main() {
                     for channel in session.channels.values() {
                         if channel.name == name {
                             session.channel = Some(channel.id);
-                            println!("{}{}Joined channel #{}", termion::clear::All, cursor::Goto(1, 1), channel.name);
+                            println!("Joined channel #{}", channel.name);
                             let packet = Packet::MessageList(common::MessageList {
                                 after: None,
                                 before: None,
@@ -680,8 +656,7 @@ fn main() {
                             text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
                         })
                     } else {
-                        print!("{}{}: {}{}", color::Fg(color::LightBlack), nick, input, color::Fg(color::Reset));
-                        flush!();
+                        screen.log_with_id(format!("{}: {}", nick, input), LogEntryId::Sending);
                         Packet::MessageCreate(common::MessageCreate {
                             channel: channel,
                             text: input.into_bytes()
@@ -689,7 +664,7 @@ fn main() {
                     };
 
                     if let Err(err) = common::write(&mut session.stream, &packet) {
-                        println!("\rFailed to deliver message");
+                        println!("Failed to deliver message");
                         println!("{}", err);
                         continue;
                     }
@@ -702,12 +677,11 @@ fn main() {
         // Could only happen if message was sent
         let _ = sent_receiver.recv_timeout(Duration::from_secs(2));
     }
-}
-
-fn to_terminal_bottom() {
-    if let Ok((_, height)) = termion::terminal_size() {
-        print!("{}{}", cursor::Save, cursor::Goto(0, height-1));
+    stop_sender.send(()).unwrap();
+    if let Some(ref mut session) = *session.lock().unwrap() {
+        let _ = common::write(&mut session.stream, &Packet::Close);
     }
+    thread.join().unwrap();
 }
 
 fn to_perm_string(allow: u8, deny: u8) -> String {
@@ -797,7 +771,7 @@ fn parse_ip(input: &str) -> Option<SocketAddr> {
 
     use std::net::ToSocketAddrs;
     match (ip, port).to_socket_addrs() {
-        Ok(ok) => ok,
-        Err(_) => return None
-    }.next()
+        Ok(mut ok) => ok.next(),
+        Err(_) => { eprintln!(":("); None }
+    }
 }

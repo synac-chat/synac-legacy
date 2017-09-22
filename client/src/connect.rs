@@ -2,15 +2,38 @@ use *;
 use common::Packet;
 use openssl::ssl::{SslConnector, SSL_VERIFY_PEER};
 use rusqlite::Connection as SqlConnection;
-use rustyline::error::ReadlineError;
 
-pub fn connect<T: rustyline::completion::Completer>(
+use frontend;
+
+pub fn connect(
     db: &SqlConnection,
-    nick: &str,
     ip: &str,
-    editor: &mut rustyline::Editor<T>,
+    nick: &str,
+    screen: &frontend::Screen,
     ssl: &SslConnector
 ) -> Option<Session> {
+    // See https://github.com/rust-lang/rust/issues/35853
+    macro_rules! println {
+        () => { screen.log(String::new()); };
+        ($($arg:expr),*) => { screen.log(format!($($arg),*)); };
+    }
+    macro_rules! readline {
+        ($break:block) => {
+            match screen.readline() {
+                Ok(ok) => ok,
+                Err(_) => $break
+            }
+        }
+    }
+    macro_rules! readpass {
+        ($break:block) => {
+            match screen.readpass() {
+                Ok(ok) => ok,
+                Err(_) => $break
+            }
+        }
+    }
+
     let addr = match parse_ip(ip) {
         Some(some) => some,
         None => {
@@ -32,8 +55,7 @@ pub fn connect<T: rustyline::completion::Completer>(
         println!("To securely connect, we need some data from the server (\"public key\").");
         println!("The server owner should have given you this.");
         println!("Once you have it, enter it here:");
-        flush!();
-        public_key = readline!(editor, "", { return None; });
+        public_key = readline!({ return None; });
 
         db.execute(
             "INSERT INTO servers (ip, key) VALUES (?, ?)",
@@ -144,8 +166,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
     }
 
     if id.is_none() {
-        print!("Password: ");
-        flush!();
+        println!("Password: ");
         let pass = readpass!({ return None; });
 
         let packet = Packet::Login(common::Login {

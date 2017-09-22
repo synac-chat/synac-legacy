@@ -1,25 +1,41 @@
 use *;
 use common::Packet;
 use rusqlite::Connection as SqlConnection;
-use std::io::{self, Read, Write};
+use std::io::Read;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use termion::cursor;
+
+use frontend;
 
 pub fn listen(
     db: Arc<Mutex<SqlConnection>>,
+    screen: Arc<frontend::Screen>,
     sent_sender: mpsc::SyncSender<()>,
-    session: Arc<Mutex<Option<Session>>>
+    session: Arc<Mutex<Option<Session>>>,
+    stop_receiver: mpsc::Receiver<()>
 ) {
+    macro_rules! println {
+        () => { screen.log(String::new()); };
+        ($($arg:expr),*) => { screen.log(format!($($arg),*)); }
+    }
+
     let mut size = true;
     let mut buf = vec![0; 2];
     let mut i = 0;
     loop {
+        thread::sleep(Duration::from_millis(100));
+
+        match stop_receiver.try_recv() {
+            Ok(_) |
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            _ => {}
+        }
+
         if let Some(ref mut session) = *session.lock().unwrap() {
             match session.stream.read(&mut buf[i..]) {
-                Ok(0) => break,
+                Ok(0) => continue,
                 Ok(read) => {
                     i += read;
                     if i >= buf.len() {
@@ -29,6 +45,7 @@ pub fn listen(
                             buf = vec![0; size];
                             i = 0;
                         } else {
+                            screen.delete(LogEntryId::Sending);
                             match common::deserialize(&buf) {
                                 Ok(Packet::ChannelReceive(event)) => {
                                     session.channels.insert(event.inner.id, event.inner);
@@ -78,19 +95,23 @@ pub fn listen(
                                 },
                                 Ok(Packet::MessageReceive(msg)) => {
                                     if session.channel == Some(msg.channel.id) {
-                                        println!("{}\r{} (ID #{}): {}", cursor::Restore, msg.author.name, msg.id,
-                                                 String::from_utf8_lossy(&msg.text));
-                                        to_terminal_bottom();
-                                        flush!();
+                                        screen.log_with_id(
+                                            format!(
+                                                "{} (ID #{}): {}",
+                                                msg.author.name,
+                                                msg.id,
+                                                String::from_utf8_lossy(&msg.text).replace("\x1b", "\\e")
+                                            ),
+                                            LogEntryId::Message(msg.id)
+                                        );
                                     }
                                     if msg.author.id == session.id {
                                         session.last = Some((msg.id, msg.text));
                                     }
                                 },
                                 Ok(Packet::MessageDeleteReceive(event)) => {
-                                    println!("{}Deleted message: {}", cursor::Restore, event.id);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    screen.delete(LogEntryId::Message(event.id));
+                                    screen.repaint();
                                 },
                                 Ok(Packet::LoginSuccess(event)) => {
                                     db.lock().unwrap().execute(
@@ -99,42 +120,28 @@ pub fn listen(
                                     ).unwrap();
                                 },
                                 Ok(Packet::RateLimited(time)) => {
-                                    println!("{}\rSlow down! You may try again in {} seconds.", cursor::Restore, time);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("Slow down! You may try again in {} seconds.", time);
                                 }
                                 Ok(Packet::Err(common::ERR_LOGIN_INVALID)) => {
-                                    println!("{}Invalid credentials", cursor::Restore);
+                                    println!("Invalid credentials");
                                 },
                                 Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
-                                    println!("{}It appears this channel was deleted", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("It appears this channel was deleted");
                                 },
                                 Ok(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE)) => {
-                                    println!("{}It appears this attribute was deleted", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("It appears this attribute was deleted");
                                 },
                                 Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
-                                    println!("{}Too short or too long. No idea which", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("Too short or too long. No idea which");
                                 },
                                 Ok(Packet::Err(common::ERR_MISSING_PERMISSION)) => {
-                                    println!("{}\rMissing permission", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("Missing permission");
                                 },
                                 Ok(Packet::Err(common::ERR_ATTR_INVALID_POS)) => {
-                                    println!("{}Invalid attribute position", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("Invalid attribute position");
                                 },
                                 Ok(Packet::Err(common::ERR_ATTR_LOCKED_NAME)) => {
-                                    println!("{}Can't change the name of that attribute", cursor::Restore);
-                                    to_terminal_bottom();
-                                    flush!();
+                                    println!("Can't change the name of that attribute");
                                 },
                                 Ok(_) => {
                                     unimplemented!();
@@ -154,7 +161,5 @@ pub fn listen(
                 Err(_) => {}
             }
         }
-        thread::sleep(Duration::from_millis(1));
-        // thread::sleep(Duration::from_millis(250));
     }
 }
