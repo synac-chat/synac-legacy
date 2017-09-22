@@ -237,6 +237,7 @@ fn main() {
         eprintln!("Is the port in use?");
         return;
     });
+    println!("Started connection on port {}", port);
 
     let config   = Rc::new(config);
     let conn_id  = Rc::new(RefCell::new(0usize));

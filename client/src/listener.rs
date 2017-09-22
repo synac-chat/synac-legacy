@@ -25,7 +25,7 @@ pub fn listen(
     let mut buf = vec![0; 2];
     let mut i = 0;
     loop {
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(1));
 
         match stop_receiver.try_recv() {
             Ok(_) |
