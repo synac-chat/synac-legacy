@@ -634,6 +634,7 @@ fn handle_client(
                     }
 
                     let mut broadcast = false;
+                    let mut broadcast_in = None;
                     let mut reply = None;
                     let mut send_init = false;
 
@@ -1106,6 +1107,9 @@ fn handle_client(
                                         &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
                                     ).unwrap();
 
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides.clone());
+                                    // I don't see any clean way to do this without clone. Sorry :(
                                     reply = Some(Packet::MessageReceive(common::MessageReceive {
                                         author: user,
                                         channel: channel,
@@ -1115,7 +1119,6 @@ fn handle_client(
                                         timestamp: timestamp,
                                         timestamp_edit: None
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
@@ -1142,6 +1145,9 @@ fn handle_client(
                                         &[&event.text, &(event.id as i64)]
                                     ).unwrap();
 
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides.clone());
+                                    // I don't see any clean way to do this without clone. Sorry :(
                                     reply = Some(Packet::MessageReceive(common::MessageReceive {
                                         author: user,
                                         channel: channel,
@@ -1151,7 +1157,6 @@ fn handle_client(
                                         timestamp: msg.timestamp,
                                         timestamp_edit: Some(timestamp)
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
@@ -1178,10 +1183,12 @@ fn handle_client(
                                         &[&(event.id as i64)]
                                     ).unwrap();
 
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides);
+                                    // I don't see any clean way to do this without clone. Sorry :(
                                     reply = Some(Packet::MessageDeleteReceive(common::MessageDeleteReceive {
                                         id: event.id
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
@@ -1343,6 +1350,21 @@ fn handle_client(
                         assert!(encoded.len() <= std::u16::MAX as usize);
                         let size = common::encode_u16(encoded.len() as u16);
                         sessions.borrow_mut().retain(|i, s| {
+                            if let Some(id) = s.id {
+                                // Check if the user really has permission to read this message.
+                                if let Some(ref overrides) = broadcast_in {
+                                    if !has_perm(
+                                        &config,
+                                        id,
+                                        calculate_permissions_by_user(&db, id, overrides).unwrap(),
+                                        common::PERM_READ
+                                    ) {
+                                        return true;
+                                    }
+                                }
+                            } else {
+                                return true;
+                            }
                             match s.writer.write_all(&size)
                                 .and_then(|_| s.writer.write_all(&encoded))
                                 .and_then(|_| s.writer.flush()) {
