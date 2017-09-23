@@ -607,6 +607,7 @@ fn main() {
                     for channel in session.channels.values() {
                         if channel.name == name {
                             session.channel = Some(channel.id);
+                            screen.clear();
                             println!("Joined channel #{}", channel.name);
                             let packet = Packet::MessageList(common::MessageList {
                                 after: None,
@@ -674,8 +675,6 @@ fn main() {
                 }
             }
         }
-        // Could only happen if message was sent
-        let _ = sent_receiver.recv_timeout(Duration::from_secs(2));
     }
     stop_sender.send(()).unwrap();
     if let Some(ref mut session) = *session.lock().unwrap() {

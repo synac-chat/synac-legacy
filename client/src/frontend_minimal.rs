@@ -25,6 +25,10 @@ impl Screen {
             stdout: Mutex::new(AlternateScreen::from(stdout))
         }
     }
+    pub fn clear(&self) {
+        self.log.write().unwrap().clear();
+        self.repaint();
+    }
     pub fn log(&self, text: String) {
         self.log_with_id(text, LogEntryId::None);
     }

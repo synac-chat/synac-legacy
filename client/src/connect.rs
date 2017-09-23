@@ -166,6 +166,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
     }
 
     if id.is_none() {
+        println!("If you don't have an account, choose a new password here.");
+        println!("Otherwise, enter your existing one.");
         println!("Password: ");
         let pass = readpass!({ return None; });
 
