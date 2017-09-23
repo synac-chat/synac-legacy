@@ -98,7 +98,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         {
             Ok(ok) => ok,
             Err(_) => {
-                println!("Faild to validate certificate");
+                println!("Failed to validate certificate");
                 return None;
             }
         }
