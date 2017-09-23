@@ -371,61 +371,10 @@ fn main() {
                             }))
                         } else { None },
                         "user" => if let Some(user) = session.users.get(&id) {
-                            let mut attributes = user.attributes.clone();
-                            loop {
-                                let result = attributes.iter().fold(String::new(), |mut acc, item| {
-                                    if !acc.is_empty() { acc.push_str(", "); }
-                                    acc.push_str(&item.to_string());
-                                    acc
-                                });
-                                println!("Attributes: [{}]", result);
-                                println!("Commands: add, remove, quit");
-
-                                let line = readline!({ break; });
-
-                                let parts = parser::parse(&line);
-                                if parts.is_empty() { continue; }
-                                let add = match &*parts[0] {
-                                    "add" => true,
-                                    "remove" => false,
-                                    "quit" => break,
-                                    _ => {
-                                        println!("Unknown command");
-                                        continue;
-                                    }
-                                };
-
-                                if parts.len() != 2 {
-                                    println!("Usage: add/remove <id>");
-                                    break;
-                                }
-                                let id = match parts[1].parse() {
-                                    Ok(ok) => ok,
-                                    Err(_) => {
-                                        println!("Invalid ID");
-                                        continue;
-                                    }
-                                };
-                                if let Some(attribute) = session.attributes.get(&id) {
-                                    if attribute.pos == 0 {
-                                        println!("Can't assign that attribute");
-                                        continue;
-                                    }
-                                    if add {
-                                        println!("Added: {}", attribute.name);
-                                        attributes.push(id);
-                                    } else {
-                                        println!("Removed: {}", attribute.name);
-                                        let pos = attributes.iter().position(|item| *item == id);
-                                        if let Some(pos) = pos {
-                                            attributes.remove(pos);
-                                        }
-                                        // TODO remove_item once stable
-                                    }
-                                } else {
-                                    println!("Couldn't find attribute");
-                                }
-                            }
+                            let attributes = match screen.get_user_attributes(user.attributes.clone(), &session) {
+                                Ok(ok) => ok,
+                                Err(_) => break
+                            };
                             Some(Packet::UserUpdate(common::UserUpdate {
                                 attributes: attributes,
                                 id: id
