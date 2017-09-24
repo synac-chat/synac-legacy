@@ -357,7 +357,7 @@ fn get_user_by_fields(row: &SqlRow) -> common::User {
         ban: row.get(1),
         bot: row.get(2),
         id: row.get::<_, i64>(3) as usize,
-        name: row.get(4)
+        name: row.get(5)
     }
 }
 fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
