@@ -128,6 +128,7 @@ fn main() {
 
     let mut editor = rustyline::Editor::<()>::new();
     loop {
+        screen.repaint();
         let input = readline!({ break; });
         if input.is_empty() {
             continue;
