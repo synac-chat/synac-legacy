@@ -192,7 +192,7 @@ impl Screen {
             };
             if let Some(attribute) = session.attributes.get(&id) {
                 if attribute.pos == 0 {
-                    println!("Can't assign that attribute");
+                    println!("Unable to assign that attribute");
                     continue;
                 }
                 if add {
@@ -207,7 +207,7 @@ impl Screen {
                     // TODO remove_item once stable
                 }
             } else {
-                println!("Couldn't find attribute");
+                println!("Could not find attribute");
             }
         }
         Ok(attributes)

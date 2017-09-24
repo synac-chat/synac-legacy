@@ -52,9 +52,9 @@ pub fn connect(
         public_key = row.get(0);
         token = row.get(1);
     } else {
-        println!("To securely connect, we need some data from the server (\"public key\").");
-        println!("The server owner should have given you this.");
-        println!("Once you have it, enter it here:");
+        println!("To securely connect, data from the server (\"public key\") is needed.");
+        println!("You can obtain the \"public key\" from the server owner.");
+        println!("Enter the key here:");
         public_key = readline!({ return None; });
 
         db.execute(
@@ -133,7 +133,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                 common::ERR_LOGIN_INVALID |
                 common::ERR_MISSING_FIELD => {},
                 common::ERR_LOGIN_BANNED => {
-                    println!("Oh noes, you have been banned from this server :(");
+                    println!("You have been banned from this server. :(");
                     return None;
                 },
                 common::ERR_LOGIN_BOT => {
@@ -149,12 +149,12 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     return None;
                 },
                 _ => {
-                    println!("The server responded with an invalid error :/");
+                    println!("The server responded with an invalid error.");
                     return None;
                 }
             },
             Ok(_) => {
-                println!("The server responded with an invalid packet :/");
+                println!("The server responded with an invalid packet.");
                 return None;
             }
             Err(err) => {
@@ -202,7 +202,7 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     return None;
                 },
                 common::ERR_LOGIN_BANNED => {
-                    println!("Oh noes, you have been banned from this server :(");
+                    println!("You have been banned from this server. :(");
                     return None;
                 },
                 common::ERR_LOGIN_BOT => {
@@ -214,12 +214,12 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     return None;
                 },
                 _ => {
-                    println!("The server responded with an invalid error :/");
+                    println!("The server responded with an invalid error. :/");
                     return None;
                 }
             },
             Ok(_) => {
-                println!("The server responded with an invalid packet :/");
+                println!("The server responded with an invalid packet. :/");
                 return None;
             }
             Err(err) => {

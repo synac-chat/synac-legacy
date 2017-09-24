@@ -126,10 +126,10 @@ pub fn listen(
                                     println!("Invalid credentials");
                                 },
                                 Ok(Packet::Err(common::ERR_UNKNOWN_CHANNEL)) => {
-                                    println!("It appears this channel was deleted");
+                                    println!("This channel was deleted");
                                 },
                                 Ok(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE)) => {
-                                    println!("It appears this attribute was deleted");
+                                    println!("This attribute was deleted");
                                 },
                                 Ok(Packet::Err(common::ERR_LIMIT_REACHED)) => {
                                     println!("Too short or too long. No idea which");
@@ -141,7 +141,7 @@ pub fn listen(
                                     println!("Invalid attribute position");
                                 },
                                 Ok(Packet::Err(common::ERR_ATTR_LOCKED_NAME)) => {
-                                    println!("Can't change the name of that attribute");
+                                    println!("Can not change the name of that attribute");
                                 },
                                 Ok(_) => {
                                     unimplemented!();
