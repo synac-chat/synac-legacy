@@ -720,7 +720,7 @@ fn handle_client(
                                         close!();
                                     });
                                     db.execute(
-                                        "INSERT INTO users (bot, last_ip, name, password, token) VALUES (?, ?, ?, ?)",
+                                        "INSERT INTO users (bot, last_ip, name, password, token) VALUES (?, ?, ?, ?, ?)",
                                         &[&login.bot, &ip.to_string(), &login.name, &password, &token]
                                     ).unwrap();
                                     let id = db.last_insert_rowid() as usize;
