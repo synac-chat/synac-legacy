@@ -74,13 +74,10 @@ fn main() {
                     ban         INTEGER NOT NULL DEFAULT 0,
                     bot         INTEGER NOT NULL,
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    last_ip     TEXT NOT NULL,
                     name        TEXT NOT NULL,
                     password    TEXT NOT NULL,
                     token       TEXT NOT NULL
-                )", &[])
-        .expect("SQLite table creation failed");
-    db.execute("CREATE TABLE IF NOT EXISTS bans (
-                    ip  TEXT NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS attributes (
@@ -266,16 +263,15 @@ fn main() {
             let mut writer = BufWriter::new(writer);
 
             {
-                let mut stmt = db_clone.prepare_cached("SELECT ip FROM bans").unwrap();
-                let mut rows = stmt.query(&[]).unwrap();
+                let count: i64 = db_clone.query_row(
+                    "SELECT COUNT(*) FROM users WHERE ban == 1 AND last_ip = ?",
+                    &[&addr.ip().to_string()],
+                    |row| row.get(0)
+                ).unwrap();
 
-                while let Some(row) = rows.next() {
-                    let ban = row.unwrap().get::<_, String>(0).parse();
-
-                    if Ok(addr.ip()) == ban {
-                        write(&mut writer, Packet::Err(common::ERR_LOGIN_BANNED));
-                        return Ok(());
-                    }
+                if count as usize > 0 {
+                    write(&mut writer, Packet::Err(common::ERR_LOGIN_BANNED));
+                    return Ok(());
                 }
             }
 
@@ -580,6 +576,12 @@ fn handle_client(
             let lines = io::read_exact(reader, vec![0; size])
                 .map_err(|_| ())
                 .and_then(move |(reader, bytes)| {
+                    if !sessions.borrow().contains_key(&conn_id) {
+                        // Server wrongfully assumed client was dead after failed write.
+                        // Well, too late now...
+                        // ... or if the user is banned, since I abused this "feature"
+                        return Ok(());
+                    }
                     let packet = match common::deserialize(&bytes) {
                         Ok(ok) => ok,
                         Err(err) => {
@@ -664,6 +666,10 @@ fn handle_client(
                                             close!();
                                         });
                                         if valid {
+                                            db.execute(
+                                                "UPDATE users SET last_ip = ? WHERE id = ?",
+                                                &[&ip.to_string(), &(row_id as i64)]
+                                            ).unwrap();
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
                                                 created: false,
                                                 id: row_id,
@@ -678,6 +684,10 @@ fn handle_client(
                                         }
                                     } else if let Some(token) = login.token {
                                         if token == row_token {
+                                            db.execute(
+                                                "UPDATE users SET last_ip = ? WHERE id = ?",
+                                                &[&ip.to_string(), &(row_id as i64)]
+                                            ).unwrap();
                                             reply = Some(Packet::LoginSuccess(common::LoginSuccess {
                                                 created: false,
                                                 id: row_id,
@@ -710,8 +720,8 @@ fn handle_client(
                                         close!();
                                     });
                                     db.execute(
-                                        "INSERT INTO users (bot, name, password, token) VALUES (?, ?, ?, ?)",
-                                        &[&login.bot, &login.name, &password, &token]
+                                        "INSERT INTO users (bot, last_ip, name, password, token) VALUES (?, ?, ?, ?)",
+                                        &[&login.bot, &ip.to_string(), &login.name, &password, &token]
                                     ).unwrap();
                                     let id = db.last_insert_rowid() as usize;
                                     let mut sessions = sessions.borrow_mut();
@@ -1198,74 +1208,104 @@ fn handle_client(
                             let id = get_id!();
                             rate_limit!(id, cheap);
 
-                            if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
-                                common::PERM_ASSIGN_ATTRIBUTES
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
-                            } else if let Some(old) = get_user(&db, user.id) {
-                                let mut changed = Vec::new();
-
-                                for attr in &user.attributes {
-                                    if !old.attributes.contains(attr) {
-                                        changed.push(*attr);
+                            if let Some(old) = get_user(&db, user.id) {
+                                if let Some(ban) = user.ban {
+                                    if user.id == id
+                                        || user.id == config.owner_id
+                                        || !has_perm(
+                                        &config,
+                                        id,
+                                        calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                        common::PERM_BAN
+                                    ) {
+                                        reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                    } else {
+                                        db.execute(
+                                            "UPDATE users SET ban = ? WHERE id = ?",
+                                            &[&ban, &(user.id as i64)]
+                                        ).unwrap();
+                                        sessions.borrow_mut().retain(|_, ref session| session.id != Some(user.id));
+                                        reply = Some(Packet::UserReceive(common::UserReceive {
+                                            inner: common::User {
+                                                attributes: old.attributes,
+                                                ban:  ban,
+                                                bot:  old.bot,
+                                                id:   old.id,
+                                                name: old.name
+                                            }
+                                        }));
+                                        broadcast = true;
                                     }
-                                }
-                                for attr in &old.attributes {
-                                    if !user.attributes.contains(attr) {
-                                        changed.push(*attr);
-                                    }
-                                }
+                                } else if let Some(attributes) = user.attributes {
+                                    if !has_perm(
+                                        &config,
+                                        id,
+                                        calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                        common::PERM_ASSIGN_ATTRIBUTES
+                                    ) {
+                                        reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
+                                    } else {
+                                        let mut changed = Vec::new();
 
-                                let correct = if id == config.owner_id {
-                                    let mut ok = true;
-                                    for attr in changed {
-                                        if attr <= RESERVED_ROLES {
-                                            ok = false;
-                                            break;
+                                        for attr in &attributes {
+                                            if !old.attributes.contains(attr) {
+                                                changed.push(*attr);
+                                            }
+                                        }
+                                        for attr in &old.attributes {
+                                            if !attributes.contains(attr) {
+                                                changed.push(*attr);
+                                            }
+                                        }
+
+                                        let correct = if id == config.owner_id {
+                                            let mut ok = true;
+                                            for attr in changed {
+                                                if attr <= RESERVED_ROLES {
+                                                    ok = false;
+                                                    break;
+                                                }
+                                            }
+                                            ok
+                                        } else if !changed.is_empty() {
+                                            let mut query = String::with_capacity(45+1+35);
+
+                                            query.push_str("SELECT COUNT(*) FROM attributes WHERE id IN (");
+                                            query.push_str(&from_list(&changed));
+                                            query.push_str(") AND unassignable = 0 AND pos != 0");
+                                            if !old.attributes.is_empty() {
+                                                query.push_str(" AND pos < (SELECT MAX(pos) FROM attributes WHERE id IN (");
+                                                query.push_str(&from_list(&old.attributes));
+                                                query.push_str("))");
+                                            }
+
+                                            let count: i64 = db.query_row(&query, &[], |row| row.get(0)).unwrap();
+                                            changed.len() == count as usize
+                                        } else { false };
+
+                                        if correct {
+                                            db.execute(
+                                                "UPDATE users SET attributes = ? WHERE id = ?",
+                                                &[&from_list(&attributes), &(user.id as i64)]
+                                            ).unwrap();
+                                            reply = Some(Packet::UserReceive(common::UserReceive {
+                                                inner: common::User {
+                                                    attributes: attributes,
+                                                    ban: old.ban,
+                                                    bot: old.bot,
+                                                    id: user.id,
+                                                    name: old.name
+                                                }
+                                            }));
+                                            broadcast = true;
+                                        } else {
+                                            reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                         }
                                     }
-                                    ok
-                                } else if !changed.is_empty() {
-                                    let mut query = String::with_capacity(45+1+35);
-
-                                    query.push_str("SELECT COUNT(*) FROM attributes WHERE id IN (");
-                                    query.push_str(&from_list(&changed));
-                                    query.push_str(") AND unassignable = 0 AND pos != 0");
-                                    if !old.attributes.is_empty() {
-                                        query.push_str(" AND pos < (SELECT MAX(pos) FROM attributes WHERE id IN (");
-                                        query.push_str(&from_list(&old.attributes));
-                                        query.push_str("))");
-                                    }
-
-                                    let count: i64 = db.query_row(&query, &[], |row| row.get(0)).unwrap();
-                                    changed.len() == count as usize
-                                } else { false };
-
-                                if correct {
-                                    db.execute(
-                                        "UPDATE users SET attributes = ? WHERE id = ?",
-                                        &[&from_list(&user.attributes), &(user.id as i64)]
-                                    ).unwrap();
-                                    reply = Some(Packet::UserReceive(common::UserReceive {
-                                        inner: common::User {
-                                            attributes: user.attributes,
-                                            ban: old.ban,
-                                            bot: old.bot,
-                                            id: user.id,
-                                            name: old.name
-                                        }
-                                    }));
-                                    broadcast = true;
-                                } else {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_USER));
                             }
-
                         },
                         Packet::LoginUpdate(login) => {
                             let mut reset_token = login.reset_token;

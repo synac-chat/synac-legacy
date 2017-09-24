@@ -376,7 +376,8 @@ fn main() {
                                 Err(_) => break
                             };
                             Some(Packet::UserUpdate(common::UserUpdate {
-                                attributes: attributes,
+                                attributes: Some(attributes),
+                                ban: None,
                                 id: id
                             }))
                         } else { None },
@@ -574,6 +575,34 @@ fn main() {
                     }
                     if !found {
                         println!("No channel found with that name");
+                    }
+                },
+                "ban" | "unban" => {
+                    usage!(1, "ban/unban <user id>");
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let id = match args[0].parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!("Failed to parse ID");
+                            continue;
+                        }
+                    };
+
+                    if !session.users.contains_key(&id) {
+                        println!("No such user");
+                        continue;
+                    }
+
+                    let packet = Packet::UserUpdate(common::UserUpdate {
+                        attributes: None,
+                        ban: Some(command == "ban"),
+                        id: id
+                    });
+                    if let Err(err) = common::write(&mut session.stream, &packet) {
+                        println!("Failed to update user");
+                        println!("{}", err);
+                        continue;
                     }
                 },
                 _ => {

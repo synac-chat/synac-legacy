@@ -27,12 +27,13 @@ pub const ERR_UNKNOWN_CHANNEL:    u8 = 11;
 pub const ERR_UNKNOWN_MESSAGE:    u8 = 12;
 pub const ERR_UNKNOWN_USER:       u8 = 13;
 
-pub const PERM_READ:  u8 = 1;
-pub const PERM_WRITE: u8 = 1 << 1;
-pub const PERM_ASSIGN_ATTRIBUTES: u8 = 1 << 2;
+pub const PERM_ASSIGN_ATTRIBUTES: u8 = 1;
+pub const PERM_BAN:               u8 = 1 << 1;
+pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 2;
 pub const PERM_MANAGE_CHANNELS:   u8 = 1 << 3;
 pub const PERM_MANAGE_MESSAGES:   u8 = 1 << 4;
-pub const PERM_MANAGE_ATTRIBUTES: u8 = 1 << 5;
+pub const PERM_READ:              u8 = 1 << 5;
+pub const PERM_WRITE:             u8 = 1 << 6;
 
 // TYPES
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -137,7 +138,8 @@ pub struct Command {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct UserUpdate {
-    pub attributes: Vec<usize>,
+    pub attributes: Option<Vec<usize>>,
+    pub ban: Option<bool>,
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
