@@ -249,9 +249,7 @@ pub fn write(
     session: &mut Session,
     ssl: &SslConnector
 ) -> bool {
-    // if let Err(err) = common::write(&mut session.stream, packet) {
-    {
-        let err = common::Error::IoError(std::io::ErrorKind::BrokenPipe.into());
+    if let Err(err) = common::write(&mut session.stream, packet) {
         screen.log(String::from("Sending failed."));
         screen.log(format!("{}", err));
         if let common::Error::IoError(err) = err {
