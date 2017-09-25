@@ -285,7 +285,7 @@ impl std::fmt::Display for Error {
         match *self {
             Error::DecodeError(ref inner) => write!(f, "{}", inner),
             Error::EncodeError(ref inner) => write!(f, "{}", inner),
-            Error::ErrPacketTooBig    => write!(f, "{}", self.description()),
+            Error::ErrPacketTooBig        => write!(f, "{}", self.description()),
             Error::IoError(ref inner)     => write!(f, "{}", inner)
         }
     }
