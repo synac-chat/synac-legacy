@@ -259,7 +259,53 @@ pub fn decode_u16(bytes: &[u8]) -> u16 {
 
     ((bytes[0] as u16) << 8) + bytes[1] as u16
 }
-pub fn read<T: io::Read>(reader: &mut T) -> Result<Packet, Box<std::error::Error>> {
+
+#[derive(Debug)]
+pub enum Error {
+    DecodeError(rmps::decode::Error),
+    EncodeError(rmps::encode::Error),
+    ErrPacketTooBig,
+    IoError(std::io::Error)
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::DecodeError(ref inner) => inner.description(),
+            Error::EncodeError(ref inner) => inner.description(),
+            Error::ErrPacketTooBig    => "Packet size must fit into an u16",
+            Error::IoError(ref inner)     => inner.description()
+        }
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use std::error::Error as StdError;
+        match *self {
+            Error::DecodeError(ref inner) => write!(f, "{}", inner),
+            Error::EncodeError(ref inner) => write!(f, "{}", inner),
+            Error::ErrPacketTooBig    => write!(f, "{}", self.description()),
+            Error::IoError(ref inner)     => write!(f, "{}", inner)
+        }
+    }
+}
+impl From<rmps::decode::Error> for Error {
+    fn from(err: rmps::decode::Error) -> Self {
+        Error::DecodeError(err)
+    }
+}
+impl From<rmps::encode::Error> for Error {
+    fn from(err: rmps::encode::Error) -> Self {
+        Error::EncodeError(err)
+    }
+}
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IoError(err)
+    }
+}
+
+pub fn read<T: io::Read>(reader: &mut T) -> Result<Packet, Error> {
     let mut buf = [0; 2];
     reader.read_exact(&mut buf)?;
 
@@ -269,26 +315,10 @@ pub fn read<T: io::Read>(reader: &mut T) -> Result<Packet, Box<std::error::Error
 
     Ok(deserialize(&buf)?)
 }
-
-#[derive(Debug)]
-pub struct ErrPacketTooBig;
-
-impl std::error::Error for ErrPacketTooBig {
-    fn description(&self) -> &str {
-        "Packet size must fit into an u16"
-    }
-}
-impl std::fmt::Display for ErrPacketTooBig {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::error::Error;
-        write!(f, "{}", self.description())
-    }
-}
-
-pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Box<std::error::Error>> {
+pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Error> {
     let buf = serialize(packet)?;
     if buf.len() > std::u16::MAX as usize {
-        return Err(Box::new(ErrPacketTooBig));
+        return Err(Error::ErrPacketTooBig);
     }
     let size = encode_u16(buf.len() as u16);
     writer.write_all(&size)?;

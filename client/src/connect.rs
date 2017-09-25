@@ -6,8 +6,8 @@ use rusqlite::Connection as SqlConnection;
 use frontend;
 
 pub fn connect(
+    addr: SocketAddr,
     db: &SqlConnection,
-    ip: &str,
     nick: &str,
     screen: &frontend::Screen,
     ssl: &SslConnector
@@ -33,14 +33,6 @@ pub fn connect(
             }
         }
     }
-
-    let addr = match parse_ip(ip) {
-        Some(some) => some,
-        None => {
-            println!("Could not parse IP");
-            return None;
-        }
-    };
 
     let mut stmt = db.prepare("SELECT key, token FROM servers WHERE ip = ?").unwrap();
     let mut rows = stmt.query(&[&addr.to_string()]).unwrap();
@@ -231,4 +223,41 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
     }
     stream.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
     Some(Session::new(addr, id.unwrap(), stream))
+}
+
+pub fn reconnect(
+    err: &std::io::Error,
+    db: &SqlConnection,
+    nick: &str,
+    screen: &frontend::Screen,
+    session: &mut Session,
+    ssl: &SslConnector
+) {
+    if err.kind() == std::io::ErrorKind::BrokenPipe {
+        screen.log(String::from("Attempting reconnect..."));
+        if let Some(new) = connect(session.addr, db, nick, screen, ssl) {
+            *session = new;
+        }
+    }
+}
+
+pub fn write(
+    db: &SqlConnection,
+    nick: &str,
+    packet: &Packet,
+    screen: &frontend::Screen,
+    session: &mut Session,
+    ssl: &SslConnector
+) -> bool {
+    // if let Err(err) = common::write(&mut session.stream, packet) {
+    {
+        let err = common::Error::IoError(std::io::ErrorKind::BrokenPipe.into());
+        screen.log(String::from("Sending failed."));
+        screen.log(format!("{}", err));
+        if let common::Error::IoError(err) = err {
+            reconnect(&err, db, nick, screen, session, ssl);
+        }
+        return false;
+    }
+    true
 }

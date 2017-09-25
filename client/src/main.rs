@@ -108,6 +108,14 @@ fn main() {
         .build();
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
 
+    macro_rules! write {
+        ($session:expr, $packet:expr, $break:block) => {
+            if connect::write(&db.lock().unwrap(), &nick, &$packet, &*screen, $session, &ssl) {
+                $break
+            }
+        }
+    }
+
     println!("Welcome, {}", nick);
     println!("To quit, type /quit");
     println!("To change your name, type");
@@ -193,10 +201,7 @@ fn main() {
                             password_new: None,
                             reset_token: false
                         });
-                        if let Err(err) = common::write(&mut session.stream, &packet) {
-                            println!("Failed to rename you on the server");
-                            println!("{}", err);
-                        }
+                        write!(session, packet, { continue; })
                     }
 
                     println!("Your name is now {}", nick);
@@ -218,11 +223,7 @@ fn main() {
                             password_new: Some(new),
                             reset_token: true // Doesn't actually matter in this case
                         });
-                        if let Err(err) = common::write(&mut session.stream, &packet) {
-                            println!("Failed to send password update");
-                            println!("{}", err);
-                            continue;
-                        }
+                        write!(session, packet, { continue; })
                     }
                     let _ = sent_receiver.recv_timeout(Duration::from_secs(10));
                 },
@@ -233,7 +234,15 @@ fn main() {
                         println!("You have to disconnect before doing that.");
                         continue;
                     }
-                    *session = connect::connect(&db.lock().unwrap(), &args[0], &nick, &screen, &ssl);
+
+                    let addr = match parse_ip(&args[0]) {
+                        Some(some) => some,
+                        None => {
+                            println!("Could not parse IP");
+                            continue;
+                        }
+                    };
+                    *session = connect::connect(addr, &db.lock().unwrap(), &nick, &screen, &ssl);
                 },
                 "disconnect" => {
                     usage!(0, "disconnect");
@@ -289,10 +298,7 @@ fn main() {
                         },
                         _ => { println!("Unable to create that"); continue; }
                     };
-                    if let Err(err) = common::write(&mut session.stream, &packet) {
-                        println!("Failed to send packet");
-                        println!("{}", err);
-                    }
+                    write!(session, packet, { continue; })
                 },
                 "update" => {
                     usage!(2, "update <\"attribute\"/\"channel\"> <id>");
@@ -388,10 +394,7 @@ fn main() {
                         }
                     };
                     if let Some(packet) = packet {
-                        if let Err(err) = common::write(&mut session.stream, &packet) {
-                            println!("Unable to delete");
-                            println!("{}", err);
-                        }
+                        write!(session, packet, { continue; })
                     } else {
                         println!("Nothing with that ID exists");
                     }
@@ -430,10 +433,7 @@ fn main() {
                         }
                     };
                     if let Some(packet) = packet {
-                        if let Err(err) = common::write(&mut session.stream, &packet) {
-                            println!("Unable to delete");
-                            println!("{}", err);
-                        }
+                        write!(session, packet, { continue; })
                     } else {
                         println!("Nothing with that ID exists");
                     }
@@ -554,27 +554,24 @@ fn main() {
                         name = &name[1..];
                     }
 
-                    let mut found = false;
+                    let mut packet = None;
                     for channel in session.channels.values() {
                         if channel.name == name {
                             session.channel = Some(channel.id);
                             screen.clear();
                             println!("Joined channel #{}", channel.name);
-                            let packet = Packet::MessageList(common::MessageList {
+                            packet = Some(Packet::MessageList(common::MessageList {
                                 after: None,
                                 before: None,
                                 channel: channel.id,
                                 limit: common::LIMIT_MESSAGE_LIST
-                            });
-                            if let Err(err) = common::write(&mut session.stream, &packet) {
-                                println!("Failed to send message_list packet");
-                                println!("{}", err);
-                            }
-                            found = true;
+                            }));
                             break;
                         }
                     }
-                    if !found {
+                    if let Some(packet) = packet {
+                        write!(session, packet, { continue; });
+                    } else {
                         println!("No channel found with that name");
                     }
                 },
@@ -600,11 +597,7 @@ fn main() {
                         ban: Some(command == "ban"),
                         id: id
                     });
-                    if let Err(err) = common::write(&mut session.stream, &packet) {
-                        println!("Failed to update user");
-                        println!("{}", err);
-                        continue;
-                    }
+                    write!(session, packet, { continue; })
                 },
                 _ => {
                     println!("Unknown command");
@@ -643,11 +636,7 @@ fn main() {
                         })
                     };
 
-                    if let Err(err) = common::write(&mut session.stream, &packet) {
-                        println!("Failed to deliver message");
-                        println!("{}", err);
-                        continue;
-                    }
+                    write!(session, packet, { continue; })
                 } else {
                     println!("No channel specified. See /create channel, /list channels and /join");
                     continue;
