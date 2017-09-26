@@ -2,7 +2,7 @@ extern crate cursive;
 
 use *;
 use self::cursive::Cursive;
-use self::cursive::view::Identifiable;
+use self::cursive::view::{Identifiable, ScrollStrategy};
 use self::cursive::views::{BoxView, DummyView, EditView, LinearLayout, ListView, TextView};
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
@@ -23,7 +23,7 @@ impl Screen {
 
         let thread = thread::spawn(move || {
             let mut cursive = Cursive::new();
-            cursive.set_fps(10);
+            cursive.set_fps(30);
 
             cursive.add_fullscreen_layer(
                 LinearLayout::horizontal()
@@ -31,6 +31,7 @@ impl Screen {
                         .child(BoxView::with_full_screen(
                             TextView::empty()
                                 .scrollable(true)
+                                .scroll_strategy(ScrollStrategy::StickToBottom)
                                 .with_id("log")
                         ))
                         .child(BoxView::with_full_width(
