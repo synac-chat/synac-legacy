@@ -1,11 +1,13 @@
+extern crate termion;
+
 use *;
 use rustyline::error::ReadlineError;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Mutex, RwLock};
-use termion::{cursor, color};
-use termion::screen::AlternateScreen;
-use {termion, rustyline};
+use self::termion::{cursor, color};
+use self::termion::screen::AlternateScreen;
+use rustyline;
 
 pub struct MuteGuard<'a>(&'a Screen);
 impl<'a> Drop for MuteGuard<'a> {
@@ -36,6 +38,7 @@ impl Screen {
             stdout: Mutex::new(AlternateScreen::from(stdout))
         }
     }
+    pub fn stop(&self) {}
 
     pub fn clear(&self) {
         self.log.write().unwrap().clear();
@@ -84,9 +87,7 @@ impl Screen {
     }
     fn repaint_(&self, log: &[(String, LogEntryId)]) {
         let mut stdout = self.stdout.lock().unwrap();
-
         let (_, height) = termion::terminal_size().unwrap_or((50, 50));
-
         let log = &log[log.len().saturating_sub(height as usize - 3)..];
         // TODO: Add a way to scroll...
 
@@ -129,7 +130,7 @@ impl Screen {
         ret
     }
     pub fn readpass(&self) -> Result<String, ()> {
-        use termion::input::TermRead;
+        use self::termion::input::TermRead;
         let mut error = None;
         let ret = {
             match self.stdin.lock().unwrap().read_passwd(&mut *self.stdout.lock().unwrap()) {

@@ -1,7 +1,6 @@
 extern crate openssl;
 extern crate rusqlite;
 extern crate rustyline;
-extern crate termion;
 extern crate common;
 
 use common::Packet;
@@ -15,12 +14,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(feature = "termion")]
 mod frontend_minimal;
+#[cfg(feature = "cursive")]
+mod frontend_cursive;
 mod connect;
 mod listener;
 mod parser;
 
+#[cfg(feature = "termion")]
 use frontend_minimal as frontend;
+#[cfg(feature = "cursive")]
+use frontend_cursive as frontend;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum LogEntryId {
@@ -124,14 +129,14 @@ fn main() {
     println!("/connect <ip>");
     println!();
 
-    let (sent_sender, sent_receiver) = mpsc::sync_channel(0);
-    let (stop_sender, stop_receiver) = mpsc::channel();
+    let (tx_sent, rx_sent) = mpsc::sync_channel(0);
+    let (tx_stop, rx_stop) = mpsc::channel();
 
     let db_clone      = Arc::clone(&db);
     let screen_clone  = Arc::clone(&screen);
     let session_clone = Arc::clone(&session);
     let thread = thread::spawn(move || {
-        listener::listen(db_clone, screen_clone, sent_sender, session_clone, stop_receiver);
+        listener::listen(db_clone, screen_clone, tx_sent, session_clone, rx_stop);
     });
 
     let mut editor = rustyline::Editor::<()>::new();
@@ -225,7 +230,7 @@ fn main() {
                         });
                         write!(session, packet, { continue; })
                     }
-                    let _ = sent_receiver.recv_timeout(Duration::from_secs(10));
+                    let _ = rx_sent.recv_timeout(Duration::from_secs(10));
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
@@ -644,11 +649,12 @@ fn main() {
             }
         }
     }
-    stop_sender.send(()).unwrap();
+    tx_stop.send(()).unwrap();
     if let Some(ref mut session) = *session.lock().unwrap() {
         let _ = common::write(&mut session.stream, &Packet::Close);
     }
     thread.join().unwrap();
+    screen.stop();
 }
 
 fn to_perm_string(allow: u8, deny: u8) -> String {
