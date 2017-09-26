@@ -2,40 +2,64 @@ extern crate cursive;
 
 use *;
 use self::cursive::Cursive;
-use self::cursive::view::SizeConstraint;
-use self::cursive::views::{BoxView, Dialog, IdView, TextView};
+use self::cursive::view::{Identifiable, SizeConstraint};
+use self::cursive::views::{BoxView, EditView, LinearLayout, TextView};
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
 pub struct Screen {
+    line:   Mutex<mpsc::Receiver<String>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,
     sink:   Mutex<mpsc::Sender<Box<Fn(&mut Cursive) + Send>>>,
     thread: Mutex<Option<thread::JoinHandle<()>>>
 }
 impl Screen {
     pub fn new() -> Screen {
-        let (tx, rx) = mpsc::channel::<Box<Fn(&mut Cursive) + Send>>();
+        let (tx_line, rx_line) = mpsc::channel::<String>();
+        let (tx_sink, rx_sink) = mpsc::channel::<Box<Fn(&mut Cursive) + Send>>();
+        // Because the Cursive built-in sink returns a borrowed reference
+        // (and I have to get it back out of the thread).
 
         let thread = thread::spawn(move || {
             let mut cursive = Cursive::new();
             cursive.set_fps(10);
 
-            cursive.add_layer(BoxView::new(
-                SizeConstraint::Full,
-                SizeConstraint::Full,
-                IdView::new("log", TextView::new("Hello World"))
-            ));
+            cursive.add_fullscreen_layer(
+                LinearLayout::vertical()
+                    .child(BoxView::new(
+                        SizeConstraint::Full,
+                        SizeConstraint::Full,
+                        TextView::new("Hello World")
+                            .with_id("log")
+                    ))
+                    .child(BoxView::new(
+                        SizeConstraint::Full,
+                        SizeConstraint::Free,
+                        EditView::new()
+                            .on_submit(move |cursive, line| {
+                                cursive.call_on_id("input", |input: &mut EditView| {
+                                    input.set_content(String::new());
+                                });
+                                tx_line.send(line.to_string()).unwrap();
+                            })
+                            .with_id("input")
+                    ))
+            );
+            cursive.focus_id("input").unwrap();
 
             while cursive.is_running() {
-                rx.recv().unwrap()(&mut cursive);
+                if let Ok(callback) = rx_sink.try_recv() {
+                    callback(&mut cursive);
+                }
                 cursive.step();
             }
         });
 
         Screen {
+            line:   Mutex::new(rx_line),
             log:    RwLock::new(Vec::new()),
-            sink:   Mutex::new(tx),
+            sink:   Mutex::new(tx_sink),
             thread: Mutex::new(Some(thread))
         }
     }
@@ -103,44 +127,20 @@ impl Screen {
     }
 
     pub fn readline(&self) -> Result<String, ()> {
-        thread::sleep(std::time::Duration::from_secs(5));
-        Err(())
-        // let mut error = None;
-        // let ret = {
-        //     let mut editor = self.editor.lock().unwrap();
-        //     match editor.readline("> ") {
-        //         Ok(some) => { editor.add_history_entry(&some); Ok(some) },
-        //         Err(ReadlineError::Interrupted) |
-        //         Err(ReadlineError::Eof) => Err(()),
-        //         Err(err) => {
-        //             error = Some(err);
-        //             Err(())
-        //         }
-        //     }
-        // };
-        // if let Some(err) = error {
-        //     self.log(format!("Failed to read line: {}", err));
-        // }
-        // ret
+        self.sink.lock().unwrap().send(Box::new(|cursive: &mut Cursive| {
+            cursive.call_on_id("input", |input: &mut EditView| {
+                input.set_secret(false);
+            });
+        })).unwrap();
+        Ok(self.line.lock().unwrap().recv().unwrap())
     }
     pub fn readpass(&self) -> Result<String, ()> {
-        Err(())
-        // use termion::input::TermRead;
-        // let mut error = None;
-        // let ret = {
-        //     match self.stdin.lock().unwrap().read_passwd(&mut *self.stdout.lock().unwrap()) {
-        //         Ok(Some(some)) => Ok(some),
-        //         Ok(None) => Err(()),
-        //         Err(err) => {
-        //             error = Some(err);
-        //             Err(())
-        //         }
-        //     }
-        // };
-        // if let Some(err) = error {
-        //     self.log(format!("Failed to read password: {}", err));
-        // }
-        // ret
+        self.sink.lock().unwrap().send(Box::new(|cursive: &mut Cursive| {
+            cursive.call_on_id("input", |input: &mut EditView| {
+                input.set_secret(true);
+            });
+        })).unwrap();
+        Ok(self.line.lock().unwrap().recv().unwrap())
     }
 
     pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
