@@ -2,8 +2,8 @@ extern crate cursive;
 
 use *;
 use self::cursive::Cursive;
-use self::cursive::view::{Identifiable, SizeConstraint};
-use self::cursive::views::{BoxView, EditView, LinearLayout, TextView};
+use self::cursive::view::Identifiable;
+use self::cursive::views::{BoxView, DummyView, EditView, LinearLayout, ListView, TextView};
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
@@ -26,24 +26,30 @@ impl Screen {
             cursive.set_fps(10);
 
             cursive.add_fullscreen_layer(
-                LinearLayout::vertical()
-                    .child(BoxView::new(
-                        SizeConstraint::Full,
-                        SizeConstraint::Full,
-                        TextView::new("Hello World")
-                            .with_id("log")
-                    ))
-                    .child(BoxView::new(
-                        SizeConstraint::Full,
-                        SizeConstraint::Free,
-                        EditView::new()
-                            .on_submit(move |cursive, line| {
-                                cursive.call_on_id("input", |input: &mut EditView| {
-                                    input.set_content(String::new());
-                                });
-                                tx_line.send(line.to_string()).unwrap();
-                            })
-                            .with_id("input")
+                LinearLayout::horizontal()
+                    .child(LinearLayout::vertical()
+                        .child(BoxView::with_full_screen(
+                            TextView::empty()
+                                .scrollable(true)
+                                .with_id("log")
+                        ))
+                        .child(BoxView::with_full_width(
+                            EditView::new()
+                                .on_submit(move |cursive, line| {
+                                    cursive.call_on_id("input", |input: &mut EditView| {
+                                        input.set_content(String::new());
+                                    });
+                                    tx_line.send(line.to_string()).unwrap();
+                                })
+                                .with_id("input")
+                        ))
+                    )
+                    .child(BoxView::with_full_height(
+                        ListView::new()
+                            .child("Channels", DummyView)
+                            .delimiter()
+                            // TODO .on_select(|_, name| { println!("{}", name); })
+                            .with_id("channels")
                     ))
             );
             cursive.focus_id("input").unwrap();
@@ -141,6 +147,29 @@ impl Screen {
             });
         })).unwrap();
         Ok(self.line.lock().unwrap().recv().unwrap())
+    }
+
+    pub fn update(&self, session: &Session) {
+        let mut names: Vec<_> = session.channels.values()
+            .map(|c| {
+                let mut name = String::with_capacity(1 + c.name.len());
+                name.push('#');
+                name.push_str(&c.name); // God forgive me for cloning
+                name
+            })
+            .collect();
+        names.sort();
+
+        self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
+            cursive.call_on_id("channels", |list: &mut ListView| {
+                list.clear();
+                list.add_child("Channels", DummyView);
+                list.add_delimiter();
+                for name in &*names {
+                    list.add_child(&name, DummyView);
+                }
+            });
+        })).unwrap();
     }
 
     pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {

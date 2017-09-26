@@ -60,6 +60,7 @@ impl Session {
 }
 
 fn main() {
+    let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
     let screen = Arc::new(frontend::Screen::new());
 
     // See https://github.com/rust-lang/rust/issues/35853
@@ -111,7 +112,6 @@ fn main() {
     let ssl = SslConnectorBuilder::new(SslMethod::tls())
         .expect("Failed to create SSL connector D:")
         .build();
-    let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
 
     macro_rules! write {
         ($session:expr, $packet:expr, $break:block) => {
