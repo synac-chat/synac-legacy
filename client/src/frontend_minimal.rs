@@ -148,7 +148,7 @@ impl Screen {
         ret
     }
 
-    pub fn update(_: &Session) {}
+    pub fn update(&self, _: &Session) {}
 
     pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
         let _guard = self.mute();
