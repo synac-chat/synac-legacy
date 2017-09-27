@@ -4,6 +4,7 @@ use *;
 use self::cursive::Cursive;
 use self::cursive::view::{Identifiable, ScrollStrategy};
 use self::cursive::views::{BoxView, DummyView, EditView, LinearLayout, ListView, TextView};
+use std::boxed::FnBox;
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
@@ -11,13 +12,13 @@ use std::thread;
 pub struct Screen {
     line:   Mutex<mpsc::Receiver<String>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,
-    sink:   Mutex<mpsc::Sender<Box<Fn(&mut Cursive) + Send>>>,
+    sink:   Mutex<mpsc::Sender<Box<FnBox(&mut Cursive) + Send>>>,
     thread: Mutex<Option<thread::JoinHandle<()>>>
 }
 impl Screen {
     pub fn new() -> Screen {
         let (tx_line, rx_line) = mpsc::channel::<String>();
-        let (tx_sink, rx_sink) = mpsc::channel::<Box<Fn(&mut Cursive) + Send>>();
+        let (tx_sink, rx_sink) = mpsc::channel::<Box<FnBox(&mut Cursive) + Send>>();
         // Because the Cursive built-in sink returns a borrowed reference
         // (and I have to get it back out of the thread).
 
@@ -57,7 +58,7 @@ impl Screen {
 
             while cursive.is_running() {
                 if let Ok(callback) = rx_sink.try_recv() {
-                    callback(&mut cursive);
+                    callback.call_box((&mut cursive,));
                 }
                 cursive.step();
             }
@@ -126,7 +127,6 @@ impl Screen {
             acc
         });
         self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
-            let text = text.clone();
             cursive.call_on_id("log", move |log: &mut TextView| {
                 log.set_content(text);
             });

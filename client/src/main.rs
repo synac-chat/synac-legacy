@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "cursive", feature(fnbox))]
+
 extern crate openssl;
 extern crate rusqlite;
 extern crate rustyline;
@@ -475,24 +477,22 @@ fn main() {
                             println!("{}", result);
                         },
                         "users" => {
-                            let mut result = String::new();
                             // something something above comment
                             let mut users: Vec<_> = session.users.values().collect();
                             users.sort_by_key(|item| &item.name);
 
                             for banned in &[false, true] {
                                 if *banned {
-                                    result.push_str("\nBanned:\n");
+                                    println!("Banned:");
                                 }
-                                result = users.iter().fold(result, |mut acc, user| {
+                                println!("{}", users.iter().fold(String::new(), |mut acc, user| {
                                     if user.ban == *banned {
                                         if !acc.is_empty() { acc.push_str(", "); }
                                         acc.push_str(&user.name);
                                     }
                                     acc
-                                });
+                                }));
                             }
-                            println!("{}", result);
                         },
                         _ => println!("Unable to list that")
                     }

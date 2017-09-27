@@ -46,6 +46,7 @@ impl Screen {
     }
 
     pub fn log(&self, text: String) {
+        debug_assert!(!text.contains('\n')); // Because that messes up the view (TODO remove?)
         self.log_with_id(text, LogEntryId::None);
     }
     pub fn log_with_id(&self, mut text: String, id: LogEntryId) {
