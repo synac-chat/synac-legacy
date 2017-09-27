@@ -1,6 +1,7 @@
 extern crate rmp_serde as rmps;
 #[macro_use] extern crate serde_derive;
 
+use std::collections::HashMap;
 use std::io;
 
 pub const DEFAULT_PORT: u16 = 8439;
@@ -58,7 +59,7 @@ pub struct User {
 pub struct Channel {
     pub id: usize,
     pub name: String,
-    pub overrides: Vec<(usize, (u8, u8))>
+    pub overrides: HashMap<usize, (u8, u8)>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Message {
@@ -99,7 +100,7 @@ pub struct AttributeDelete {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelCreate {
     pub name: String,
-    pub overrides: Vec<(usize, (u8, u8))>
+    pub overrides: HashMap<usize, (u8, u8)>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChannelUpdate {

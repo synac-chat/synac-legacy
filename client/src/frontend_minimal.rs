@@ -200,20 +200,92 @@ impl Screen {
                     continue;
                 }
                 if add {
-                    println!("Added: {}", attribute.name);
                     attributes.push(id);
+                    println!("Added: {}", attribute.name);
                 } else {
-                    println!("Removed: {}", attribute.name);
                     let pos = attributes.iter().position(|item| *item == id);
                     if let Some(pos) = pos {
                         attributes.remove(pos);
                     }
                     // TODO remove_item once stable
+                    println!("Removed: {}", attribute.name);
                 }
             } else {
                 println!("Could not find attribute");
             }
         }
         Ok(attributes)
+    }
+    pub fn get_channel_overrides(&self, mut overrides: HashMap<usize, (u8, u8)>, session: &Session)
+            -> Result<HashMap<usize, (u8, u8)>, ()> {
+        let _guard = self.mute();
+        let mut log = Vec::with_capacity(2);
+
+        macro_rules! println {
+            ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
+        }
+
+        loop {
+            let result = overrides.iter().fold(String::new(), |mut acc, (role, &(allow, deny))| {
+                if !acc.is_empty() { acc.push_str(", "); }
+                acc.push_str(&role.to_string());
+                acc.push_str(": ");
+                acc.push_str(&to_perm_string(allow, deny));
+                acc
+            });
+            println!("Overrides: [{}]", result);
+            println!("Commands: set, unset, quit");
+            self.repaint_(&log);
+
+            let line = self.readline()?;
+
+            let parts = parser::parse(&line);
+            if parts.is_empty() { continue; }
+            let set = match &*parts[0] {
+                "set" => true,
+                "unset" => false,
+                "quit" => break,
+                _ => {
+                    println!("Unknown command");
+                    continue;
+                }
+            };
+
+            if set && parts.len() != 3 {
+                println!("Usage: set <id> [perms]");
+                continue;
+            } else if !set && parts.len() != 2 {
+                println!("Usage: unset <id>");
+                continue;
+            }
+            let id = match parts[1].parse() {
+                Ok(ok) => ok,
+                Err(_) => {
+                    println!("Invalid ID");
+                    continue;
+                }
+            };
+            if let Some(attribute) = session.attributes.get(&id) {
+                if set {
+                    let (mut allow, mut deny) = (0, 0);
+                    if let Some(perms) = overrides.get(&id) {
+                        allow = perms.0;
+                        deny  = perms.1;
+                    }
+                    if !from_perm_string(&parts[2], &mut allow, &mut deny) {
+                        println!("Invalid permission string");
+                        continue;
+                    }
+                    overrides.insert(id, (allow, deny));
+                    println!("Set \"{}\" to {}", attribute.name, to_perm_string(allow, deny));
+                } else {
+                    overrides.remove(&id);
+                    println!("Unset: {}", attribute.name);
+                }
+            } else {
+                println!("Could not find attribute");
+            }
+        }
+        Ok(overrides)
     }
 }

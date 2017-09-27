@@ -380,7 +380,12 @@ fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
         unassignable: row.get(5)
     }
 }
-fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_overrides: &[(usize, (u8, u8))]) -> u8 {
+fn calculate_permissions(
+        db: &SqlConnection,
+        bot: bool,
+        ids: &[usize],
+        chan_overrides: Option<&HashMap<usize, (u8, u8)>>
+    ) -> u8 {
     let mut query = String::with_capacity(48+3+1+14);
     query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
     query.push_str(if bot { "2" } else { "1" });
@@ -395,15 +400,21 @@ fn calculate_permissions(db: &SqlConnection, bot: bool, ids: &[usize], chan_over
     let mut perms = 0;
     common::perm_apply_iter(&mut perms, &mut rows);
 
-    for &(role, chan_perms) in chan_overrides {
-        if role <= RESERVED_ROLES || ids.contains(&role) {
-            common::perm_apply(&mut perms, chan_perms);
+    if let Some(chan_overrides) = chan_overrides {
+        for (role, chan_perms) in chan_overrides {
+            if *role <= RESERVED_ROLES || ids.contains(&role) {
+                common::perm_apply(&mut perms, *chan_perms);
+            }
         }
     }
 
     perms
 }
-fn calculate_permissions_by_user(db: &SqlConnection, id: usize, chan_overrides: &[(usize, (u8, u8))]) -> Option<u8> {
+fn calculate_permissions_by_user(
+        db: &SqlConnection,
+        id: usize,
+        chan_overrides: Option<&HashMap<usize, (u8, u8)>>
+    ) -> Option<u8> {
     let mut stmt = db.prepare_cached("SELECT attributes, bot FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 
@@ -432,11 +443,11 @@ fn get_channel_by_fields(db: &SqlConnection, row: &SqlRow) -> common::Channel {
     let mut stmt = db.prepare_cached("SELECT allow, attribute, deny FROM overrides WHERE channel = ?").unwrap();
     let mut rows = stmt.query(&[&id]).unwrap();
 
-    let mut overrides = Vec::new();
+    let mut overrides = HashMap::new();
 
     while let Some(row) = rows.next() {
         let row = row.unwrap();
-        overrides.push((row.get::<_, i64>(1) as usize, (row.get(0), row.get(2))));
+        overrides.insert(row.get::<_, i64>(1) as usize, (row.get(0), row.get(2)));
     }
 
     common::Channel {
@@ -445,20 +456,20 @@ fn get_channel_by_fields(db: &SqlConnection, row: &SqlRow) -> common::Channel {
         name: row.get(1)
     }
 }
-fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &[(usize, (u8, u8))]) {
+fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &HashMap<usize, (u8, u8)>) {
     db.execute("DELETE FROM overrides WHERE channel = ?", &[&(channel as i64)]).unwrap();
 
     let mut stmt_exists = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?") .unwrap();
     let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, attribute, channel, deny) VALUES (?, ?, ?, ?)")
         .unwrap();
 
-    for &(id, (allow, deny)) in overrides {
+    for (id, &(allow, deny)) in overrides {
         let count: i64 = stmt_exists.query_row(
-            &[&(id as i64)],
+            &[&(*id as i64)],
             |row| row.get(0)
         ).unwrap();
         if count as usize > 0 {
-            stmt_insert.execute(&[&allow, &(id as i64), &(channel as i64), &deny]).unwrap();
+            stmt_insert.execute(&[&allow, &(*id as i64), &(channel as i64), &deny]).unwrap();
         }
     }
 }
@@ -759,7 +770,7 @@ fn handle_client(
                             } else if !has_perm(
                                 &config,
                                 id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
                                 common::PERM_MANAGE_ATTRIBUTES
                             ) {
                                 reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -812,7 +823,7 @@ fn handle_client(
                             } else if !has_perm(
                                 &config,
                                 id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
                                 common::PERM_MANAGE_ATTRIBUTES
                             ) {
                                 reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -869,7 +880,7 @@ fn handle_client(
                             if !has_perm(
                                 &config,
                                 id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
                                 common::PERM_MANAGE_ATTRIBUTES
                             ) {
                                 reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -917,7 +928,7 @@ fn handle_client(
                             } else if !has_perm(
                                 &config,
                                 id,
-                                calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
                                 common::PERM_MANAGE_CHANNELS
                             ) {
                                 reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -952,7 +963,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions_by_user(&db, id, &old.overrides).unwrap(),
+                                    calculate_permissions_by_user(&db, id, Some(&old.overrides)).unwrap(),
                                     common::PERM_MANAGE_CHANNELS
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -984,7 +995,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions_by_user(&db, id, &channel.overrides).unwrap(),
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
                                     common::PERM_MANAGE_CHANNELS
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1021,7 +1032,7 @@ fn handle_client(
                                 } else if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions_by_user(&db, id, &channel.unwrap().overrides).unwrap(),
+                                    calculate_permissions_by_user(&db, id, Some(&channel.unwrap().overrides)).unwrap(),
                                     common::PERM_READ
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1107,7 +1118,7 @@ fn handle_client(
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
+                                    calculate_permissions(&db, user.bot, &user.attributes, Some(&channel.overrides)),
                                     common::PERM_WRITE
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1183,7 +1194,7 @@ fn handle_client(
                                 if msg.author != id && !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions(&db, user.bot, &user.attributes, &channel.overrides),
+                                    calculate_permissions(&db, user.bot, &user.attributes, Some(&channel.overrides)),
                                     common::PERM_MANAGE_MESSAGES
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1215,7 +1226,7 @@ fn handle_client(
                                         || !has_perm(
                                         &config,
                                         id,
-                                        calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                        calculate_permissions_by_user(&db, id, None).unwrap(),
                                         common::PERM_BAN
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1240,7 +1251,7 @@ fn handle_client(
                                     if !has_perm(
                                         &config,
                                         id,
-                                        calculate_permissions_by_user(&db, id, &[]).unwrap(),
+                                        calculate_permissions_by_user(&db, id, None).unwrap(),
                                         common::PERM_ASSIGN_ATTRIBUTES
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
@@ -1396,7 +1407,7 @@ fn handle_client(
                                     if !has_perm(
                                         &config,
                                         id,
-                                        calculate_permissions_by_user(&db, id, overrides).unwrap(),
+                                        calculate_permissions_by_user(&db, id, Some(overrides)).unwrap(),
                                         common::PERM_READ
                                     ) {
                                         return true;

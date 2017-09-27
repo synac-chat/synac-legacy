@@ -283,7 +283,7 @@ fn main() {
                                 name.drain(..1);
                             }
                             Packet::ChannelCreate(common::ChannelCreate {
-                                overrides: Vec::new(),
+                                overrides: HashMap::new(),
                                 name: name
                             })
                         },
@@ -375,13 +375,19 @@ fn main() {
                             let name = readline!({ continue; });
                             let mut name = name.trim();
                             if name.is_empty() { name = &channel.name }
+
+                            let overrides = match screen.get_channel_overrides(channel.overrides.clone(), &session) {
+                                Ok(ok) => ok,
+                                Err(_) => break
+                            };
+
                             Some(Packet::ChannelUpdate(common::ChannelUpdate {
                                 inner: common::Channel {
                                     id: channel.id,
                                     name: name.to_string(),
-                                    overrides: Vec::new()
+                                    overrides: overrides
                                 },
-                                keep_overrides: true
+                                keep_overrides: false
                             }))
                         } else { None },
                         "user" => if let Some(user) = session.users.get(&id) {
@@ -515,7 +521,7 @@ fn main() {
                             || Ok(channel.id) == id {
                             println!("Channel #{}", channel.name);
                             println!("ID: #{}", channel.id);
-                            for &(id, (allow, deny)) in &channel.overrides {
+                            for (id, &(allow, deny)) in &channel.overrides {
                                 println!("Permission override: Role #{} = {}", id, to_perm_string(allow, deny));
                             }
                         }
