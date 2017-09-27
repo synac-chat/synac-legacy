@@ -3,8 +3,9 @@ extern crate cursive;
 use *;
 use self::cursive::Cursive;
 use self::cursive::view::{Identifiable, ScrollStrategy};
-use self::cursive::views::{BoxView, DummyView, EditView, LinearLayout, ListView, TextView};
+use self::cursive::views::*;
 use std::boxed::FnBox;
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
@@ -173,70 +174,75 @@ impl Screen {
         })).unwrap();
     }
 
-    pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
+    pub fn get_user_attributes(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
         Err(())
-        // let _guard = self.mute();
-        // let mut log = Vec::with_capacity(2);
-
-        // macro_rules! println {
-        //     ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
-        // }
-
-        // loop {
-        //     let result = attributes.iter().fold(String::new(), |mut acc, item| {
-        //         if !acc.is_empty() { acc.push_str(", "); }
-        //         acc.push_str(&item.to_string());
-        //         acc
-        //     });
-        //     println!("Attributes: [{}]", result);
-        //     println!("Commands: add, remove, quit");
-        //     self.repaint_(&log);
-
-        //     let line = self.readline()?;
-
-        //     let parts = parser::parse(&line);
-        //     if parts.is_empty() { continue; }
-        //     let add = match &*parts[0] {
-        //         "add" => true,
-        //         "remove" => false,
-        //         "quit" => break,
-        //         _ => {
-        //             println!("Unknown command");
-        //             continue;
-        //         }
-        //     };
-
-        //     if parts.len() != 2 {
-        //         println!("Usage: add/remove <id>");
-        //         continue;
-        //     }
-        //     let id = match parts[1].parse() {
-        //         Ok(ok) => ok,
-        //         Err(_) => {
-        //             println!("Invalid ID");
-        //             continue;
-        //         }
-        //     };
-        //     if let Some(attribute) = session.attributes.get(&id) {
-        //         if attribute.pos == 0 {
-        //             println!("Unable to assign that attribute");
-        //             continue;
-        //         }
-        //         if add {
-        //             println!("Added: {}", attribute.name);
-        //             attributes.push(id);
-        //         } else {
-        //             println!("Removed: {}", attribute.name);
-        //             let pos = attributes.iter().position(|item| *item == id);
-        //             if let Some(pos) = pos {
-        //                 attributes.remove(pos);
-        //             }
-        //             // TODO remove_item once stable
-        //         }
-        //     } else {
-        //         println!("Could not find attribute");
-        //     }
-        // }
-        // Ok(attributes)
     }
+    pub fn get_channel_overrides(&self, overrides: HashMap<usize, (u8, u8)>, session: &Session)
+            -> Result<HashMap<usize, (u8, u8)>, ()> {
+        let names: HashMap<usize, String> = session.attributes.iter()
+            .map(|(id, attribute)| (*id, attribute.name.clone()))
+            .collect();
+
+        self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
+            let mut group_read    = RadioGroup::new();
+            let mut group_write   = RadioGroup::new();
+            let mut group_channel = RadioGroup::new();
+
+            let names = Rc::new(names);
+            let names_clone = Rc::clone(&names);
+
+            cursive.add_layer(Dialog::new()
+                    .title("Channel override")
+                    .content(LinearLayout::vertical()
+                        .child(SelectView::new()
+                            .popup()
+                            .item_str("Select a role")
+                            .with_id("role"))
+                        .child(checkbox(&mut group_read, "Read messages in this channel"))
+                        .child(checkbox(&mut group_write, "Send messages in this channel"))
+                        .child(checkbox(&mut group_channel, "Manage this channel")))
+                    .button("Add", move |cursive| {
+                        cursive.add_layer(Dialog::around(SelectView::new()
+                            .with_all_str(names_clone.iter().map(|(id, name)| {
+                                let mut result = id.to_string();
+                                result.reserve(2 + name.len());
+                                result.push_str(": ");
+                                result.push_str(&name);
+                                result
+                            }))
+                            .on_submit(|cursive: &mut Cursive, string: &str| {
+                                cursive.pop_layer();
+                                cursive.call_on_id("role", |select: &mut SelectView| {
+                                    select.add_item_str(string.to_string());
+                                });
+                            })
+                        ).dismiss_button("Cancel"));
+                    })
+                    .button("Finish", |cursive| {
+                        cursive.pop_layer();
+                        // TODO return stuff
+                    }));
+
+            cursive.call_on_id("role", |select: &mut SelectView| {
+                select.add_all_str(overrides.keys().map(|id| {
+                    let mut result = id.to_string();
+                    if let Some(name) = names.get(&id) {
+                        result.reserve(2 + name.len());
+                        result.push_str(": ");
+                        result.push_str(&name);
+                    }
+                    result
+                }));
+            });
+        })).unwrap();
+        Err(())
+    }
+}
+fn checkbox<S: Into<String>>(group: &mut RadioGroup<String>, text: S) -> LinearLayout {
+    LinearLayout::horizontal()
+        .child(BoxView::with_fixed_width(40, TextView::new(text)))
+        .child(DummyView)
+        .child(group.button_str(""))
+        .child(group.button_str(""))
+        .child(group.button_str(""))
 }

@@ -378,7 +378,7 @@ fn main() {
 
                             let overrides = match screen.get_channel_overrides(channel.overrides.clone(), &session) {
                                 Ok(ok) => ok,
-                                Err(_) => break
+                                Err(_) => continue
                             };
 
                             Some(Packet::ChannelUpdate(common::ChannelUpdate {
@@ -393,7 +393,7 @@ fn main() {
                         "user" => if let Some(user) = session.users.get(&id) {
                             let attributes = match screen.get_user_attributes(user.attributes.clone(), &session) {
                                 Ok(ok) => ok,
-                                Err(_) => break
+                                Err(_) => continue
                             };
                             Some(Packet::UserUpdate(common::UserUpdate {
                                 attributes: Some(attributes),
