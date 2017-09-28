@@ -21,6 +21,9 @@ pub fn listen(
         ($($arg:expr),*) => { screen.log(format!($($arg),*)); }
     }
 
+    let mut typing_last = Instant::now();
+    let typing_check = Duration::from_secs(1);
+
     let mut size = true;
     let mut buf = vec![0; 2];
     let mut i = 0;
@@ -34,6 +37,22 @@ pub fn listen(
         }
 
         if let Some(ref mut session) = *session.lock().unwrap() {
+            if typing_last.elapsed() >= typing_check {
+                typing_last = Instant::now();
+                let duration = Duration::from_secs(common::TYPING_TIMEOUT as u64); // TODO use const fn
+                session.typing.retain(|_, time| time.elapsed() < duration);
+
+                let people = session.typing.keys()
+                    .filter_map(|&(author, channel)| {
+                        if Some(channel) != session.channel {
+                            return None;
+                        }
+
+                        session.users.get(&author).map(|ref user| &user.name)
+                    });
+
+                screen.typing_set(get_typing_string(people, session.typing.len()));
+            }
             match session.stream.read(&mut buf[i..]) {
                 Ok(0) => continue,
                 Ok(read) => {
@@ -97,9 +116,11 @@ pub fn listen(
                                             session.users.insert(event.inner.id, event.inner);
                                         },
                                         Packet::TypingReceive(event) => {
-                                            println!("{} typing in channel #{}", event.author, event.channel);
+                                            session.typing.insert((event.author, event.channel), Instant::now());
                                         },
                                         Packet::MessageReceive(msg) => {
+                                            session.typing.remove(&(msg.author.id, msg.channel.id));
+
                                             if session.channel == Some(msg.channel.id) {
                                                 screen.log_with_id(
                                                     format!(

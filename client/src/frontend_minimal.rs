@@ -22,7 +22,8 @@ pub struct Screen {
     log:    RwLock<Vec<(String, LogEntryId)>>,
     mute:   AtomicBool,
     stdin:  Mutex<io::Stdin>,
-    stdout: Mutex<AlternateScreen<io::Stdout>>
+    stdout: Mutex<AlternateScreen<io::Stdout>>,
+    typing: RwLock<String>
 }
 impl Screen {
     pub fn new() -> Screen {
@@ -35,7 +36,8 @@ impl Screen {
             log:    RwLock::new(Vec::new()),
             mute:   AtomicBool::new(false),
             stdin:  Mutex::new(stdin),
-            stdout: Mutex::new(AlternateScreen::from(stdout))
+            stdout: Mutex::new(AlternateScreen::from(stdout)),
+            typing: RwLock::new(String::new())
         }
     }
     pub fn stop(&self) {}
@@ -102,8 +104,8 @@ impl Screen {
             }
         }
 
-        write!(stdout, "{}", cursor::Goto(1, height-1)).unwrap();
-        write!(stdout, "> ").unwrap();
+        write!(stdout, "{}{}", cursor::Goto(1, height), self.typing.read().unwrap()).unwrap();
+        write!(stdout, "{}> ", cursor::Goto(1, height-1)).unwrap();
         stdout.flush().unwrap();
     }
     pub fn mute(&self) -> MuteGuard {
@@ -111,7 +113,7 @@ impl Screen {
         MuteGuard(self)
     }
 
-    pub fn readline(&self, _: Option<Box<Fn(&str) + Send>>) -> Result<String, ()> {
+    pub fn readline(&self, _: Option<Box<FnMut(&str) + Send>>) -> Result<String, ()> {
         let mut error = None;
         let ret = {
             let mut editor = self.editor.lock().unwrap();
@@ -149,6 +151,13 @@ impl Screen {
         ret
     }
 
+    pub fn typing_set(&self, typing: String) {
+        if *self.typing.read().unwrap() == typing {
+            return;
+        }
+        *self.typing.write().unwrap() = typing;
+        self.repaint();
+    }
     pub fn update(&self, _: &Session) {}
 
     pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
@@ -169,7 +178,7 @@ impl Screen {
             println!("Commands: add, remove, quit");
             self.repaint_(&log);
 
-            let line = self.readline()?;
+            let line = self.readline(None)?;
 
             let parts = parser::parse(&line);
             if parts.is_empty() { continue; }
@@ -237,7 +246,7 @@ impl Screen {
             println!("Commands: set, unset, quit");
             self.repaint_(&log);
 
-            let line = self.readline()?;
+            let line = self.readline(None)?;
 
             let parts = parser::parse(&line);
             if parts.is_empty() { continue; }

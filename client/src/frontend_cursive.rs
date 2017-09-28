@@ -58,6 +58,10 @@ impl Screen {
                                 })
                                 .with_id("input")
                         ))
+                        .child(BoxView::with_full_width(
+                            TextView::empty()
+                                .with_id("typing")
+                        ))
                     )
                     .child(BoxView::with_full_height(
                         ListView::new()
@@ -135,21 +139,21 @@ impl Screen {
         self.repaint_(&**self.log.read().unwrap());
     }
     fn repaint_(&self, log: &[(String, LogEntryId)]) {
-        let text = log.iter().fold(String::new(), |mut acc, entry| {
+        let log = log.iter().fold(String::new(), |mut acc, entry| {
             acc.push_str(&entry.0);
             acc.push('\n');
             acc
         });
         self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
-            cursive.call_on_id("log", move |log: &mut TextView| {
-                log.set_content(text);
+            cursive.call_on_id("log", move |view: &mut TextView| {
+                view.set_content(log);
             });
         })).unwrap();
     }
 
-    pub fn readline(&self, callback: Option<Box<FnMut(&str) + Send>>) -> Result<String, ()> {
-        if callback.is_some() {
-            *self.typing.lock().unwrap() = callback;
+    pub fn readline(&self, typing: Option<Box<FnMut(&str) + Send>>) -> Result<String, ()> {
+        if typing.is_some() {
+            *self.typing.lock().unwrap() = typing;
         }
         Ok(self.line.lock().unwrap().recv().unwrap())
     }
@@ -162,6 +166,13 @@ impl Screen {
         Ok(self.line.lock().unwrap().recv().unwrap())
     }
 
+    pub fn typing_set(&self, typing: String) {
+        self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
+            cursive.call_on_id("typing", move |view: &mut TextView| {
+                view.set_content(typing);
+            });
+        })).unwrap();
+    }
     pub fn update(&self, session: &Session) {
         let mut names: Vec<_> = session.channels.values()
             .map(|c| {

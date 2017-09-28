@@ -44,6 +44,7 @@ pub struct Session {
     id: usize,
     last: Option<(usize, Vec<u8>)>,
     stream: SslStream<TcpStream>,
+    typing: HashMap<(usize, usize), Instant>,
     users: HashMap<usize, common::User>
 }
 impl Session {
@@ -56,6 +57,7 @@ impl Session {
             id: id,
             last: None,
             stream: stream,
+            typing: HashMap::new(),
             users: HashMap::new()
         }
     }
@@ -147,12 +149,11 @@ fn main() {
         let input = {
             let session_clone = Arc::clone(&session);
             let mut last: Option<Instant> = None;
+            let timeout = Duration::from_secs(common::TYPING_TIMEOUT as u64 / 2);
             match screen.readline(Some(Box::new(move |_| {
                 if let Some(ref mut session) = *session_clone.lock().unwrap() {
                     if let Some(channel) = session.channel {
-                        if last.is_none()
-                            || last.unwrap().elapsed() > Duration::from_secs(common::TYPING_TIMEOUT as u64 / 2) {
-
+                        if last.is_none() || last.unwrap().elapsed() >= timeout {
                             let packet = Packet::Typing(common::Typing {
                                 channel: channel
                             });
@@ -773,5 +774,24 @@ fn parse_ip(input: &str) -> Option<SocketAddr> {
     match (ip, port).to_socket_addrs() {
         Ok(mut ok) => ok.next(),
         Err(_) => { println!(":("); None }
+    }
+}
+
+fn get_typing_string<I, V>(mut people: I, len: usize) -> String
+    where I: Iterator<Item = V>,
+          V: AsRef<str> {
+    macro_rules! next {
+        () => { people.next().unwrap().as_ref() }
+    }
+    match len {
+        n if n > 500 => format!("(╯°□°）╯︵ ┻━┻"),
+        n if n > 100 => format!("A crap ton of people are typing"),
+        n if n > 50 => format!("Over 50 people are typing"),
+        n if n > 10 => format!("Over 10 people are typing"),
+        n if n > 3 => format!("Several people are typing"),
+        3 => format!("{}, {} and {} are typing", next!(), next!(), next!()),
+        2 => format!("{} and {} are typing", next!(), next!()),
+        1 => format!("{} is typing", next!()),
+        _ => String::new()
     }
 }
