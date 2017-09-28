@@ -4,7 +4,8 @@ extern crate rmp_serde as rmps;
 use std::collections::HashMap;
 use std::io;
 
-pub const DEFAULT_PORT: u16 = 8439;
+pub const DEFAULT_PORT: u16  = 8439;
+pub const TYPING_TIMEOUT: u8 = 10;
 
 pub const LIMIT_USER_NAME:    usize = 128;
 pub const LIMIT_CHANNEL_NAME: usize = 128;
@@ -119,6 +120,10 @@ pub struct MessageList {
     pub limit: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Typing {
+    pub channel: usize
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageCreate {
     pub channel: usize,
     pub text: Vec<u8>
@@ -181,6 +186,11 @@ pub struct ChannelDeleteReceive {
     pub inner: Channel
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct TypingReceive {
+    pub author: usize,
+    pub channel: usize
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageReceive {
     pub author: User,
     pub channel: Channel,
@@ -223,6 +233,7 @@ packet! {
     ChannelUpdate,
     ChannelDelete,
     MessageList,
+    Typing,
     MessageCreate,
     MessageUpdate,
     MessageDelete,
@@ -236,6 +247,7 @@ packet! {
     AttributeDeleteReceive,
     ChannelReceive,
     ChannelDeleteReceive,
+    TypingReceive,
     MessageReceive,
     MessageDeleteReceive,
     CommandReceive

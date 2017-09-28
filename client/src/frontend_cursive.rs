@@ -14,7 +14,8 @@ pub struct Screen {
     line:   Mutex<mpsc::Receiver<String>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,
     sink:   Mutex<mpsc::Sender<Box<FnBox(&mut Cursive) + Send>>>,
-    thread: Mutex<Option<thread::JoinHandle<()>>>
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
+    typing: Arc<Mutex<Option<Box<FnMut(&str) + Send>>>>
 }
 impl Screen {
     pub fn new() -> Screen {
@@ -22,6 +23,10 @@ impl Screen {
         let (tx_sink, rx_sink) = mpsc::channel::<Box<FnBox(&mut Cursive) + Send>>();
         // Because the Cursive built-in sink returns a borrowed reference
         // (and I have to get it back out of the thread).
+
+        let typing: Arc<Mutex<Option<Box<FnMut(&str) + Send>>>> = Arc::new(Mutex::new(None));
+        let typing_clone1 = Arc::clone(&typing);
+        let typing_clone2 = Arc::clone(&typing);
 
         let thread = thread::spawn(move || {
             let mut cursive = Cursive::new();
@@ -38,10 +43,17 @@ impl Screen {
                         ))
                         .child(BoxView::with_full_width(
                             EditView::new()
+                                .on_edit(move |_, line, _| {
+                                    if let Some(ref mut callback) = *typing_clone1.lock().unwrap() {
+                                        callback(line);
+                                    }
+                                })
                                 .on_submit(move |cursive, line| {
                                     cursive.call_on_id("input", |input: &mut EditView| {
                                         input.set_content(String::new());
+                                        input.set_secret(false);
                                     });
+                                    *typing_clone2.lock().unwrap() = None;
                                     tx_line.send(line.to_string()).unwrap();
                                 })
                                 .with_id("input")
@@ -69,7 +81,8 @@ impl Screen {
             line:   Mutex::new(rx_line),
             log:    RwLock::new(Vec::new()),
             sink:   Mutex::new(tx_sink),
-            thread: Mutex::new(Some(thread))
+            thread: Mutex::new(Some(thread)),
+            typing: typing
         }
     }
     pub fn stop(&self) {
@@ -134,12 +147,10 @@ impl Screen {
         })).unwrap();
     }
 
-    pub fn readline(&self) -> Result<String, ()> {
-        self.sink.lock().unwrap().send(Box::new(|cursive: &mut Cursive| {
-            cursive.call_on_id("input", |input: &mut EditView| {
-                input.set_secret(false);
-            });
-        })).unwrap();
+    pub fn readline(&self, callback: Option<Box<FnMut(&str) + Send>>) -> Result<String, ()> {
+        if callback.is_some() {
+            *self.typing.lock().unwrap() = callback;
+        }
         Ok(self.line.lock().unwrap().recv().unwrap())
     }
     pub fn readpass(&self) -> Result<String, ()> {

@@ -96,6 +96,9 @@ pub fn listen(
                                         Packet::UserReceive(event) => {
                                             session.users.insert(event.inner.id, event.inner);
                                         },
+                                        Packet::TypingReceive(event) => {
+                                            println!("{} typing in channel #{}", event.author, event.channel);
+                                        },
                                         Packet::MessageReceive(msg) => {
                                             if session.channel == Some(msg.channel.id) {
                                                 screen.log_with_id(

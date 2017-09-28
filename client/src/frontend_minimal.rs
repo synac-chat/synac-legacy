@@ -111,7 +111,7 @@ impl Screen {
         MuteGuard(self)
     }
 
-    pub fn readline(&self) -> Result<String, ()> {
+    pub fn readline(&self, _: Option<Box<Fn(&str) + Send>>) -> Result<String, ()> {
         let mut error = None;
         let ret = {
             let mut editor = self.editor.lock().unwrap();

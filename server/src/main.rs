@@ -745,6 +745,7 @@ fn handle_client(
                                     }));
                                     send_init = true;
 
+                                    broadcast = true;
                                     reply = Some(Packet::UserReceive(common::UserReceive {
                                         inner: common::User {
                                             attributes: Vec::new(),
@@ -754,7 +755,6 @@ fn handle_client(
                                             name: login.name
                                         }
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
@@ -797,6 +797,7 @@ fn handle_client(
                                         &attr.unassignable]
                                     ).unwrap();
 
+                                    broadcast = true;
                                     reply = Some(Packet::AttributeReceive(common::AttributeReceive {
                                         inner: common::Attribute {
                                             allow: attr.allow,
@@ -808,7 +809,6 @@ fn handle_client(
                                         },
                                         new: true
                                     }));
-                                    broadcast = true;
                                 }
                             }
                         },
@@ -858,6 +858,7 @@ fn handle_client(
                                         &(attr.id as i64)]
                                     ).unwrap();
 
+                                    broadcast = true;
                                     reply = Some(Packet::AttributeReceive(common::AttributeReceive {
                                         inner: common::Attribute {
                                             allow: attr.allow,
@@ -869,7 +870,6 @@ fn handle_client(
                                         },
                                         new: true
                                     }));
-                                    broadcast = true;
                                 }
                             }
                         },
@@ -901,6 +901,7 @@ fn handle_client(
                                         &[&(attr.id as i64)]
                                     ).unwrap();
 
+                                    broadcast = true;
                                     reply = Some(Packet::AttributeDeleteReceive(common::AttributeDeleteReceive {
                                         inner: common::Attribute {
                                             allow: attr.allow,
@@ -911,7 +912,6 @@ fn handle_client(
                                             unassignable: attr.unassignable
                                         }
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE));
@@ -940,6 +940,7 @@ fn handle_client(
                                 let channel_id = db.last_insert_rowid() as usize;
                                 insert_channel_overrides(&db, channel_id, &channel.overrides);
 
+                                broadcast = true;
                                 reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                     inner: common::Channel {
                                         overrides:  channel.overrides,
@@ -947,7 +948,6 @@ fn handle_client(
                                         name: channel.name
                                     }
                                 }));
-                                broadcast = true;
                             }
                         },
                         Packet::ChannelUpdate(event) => {
@@ -976,6 +976,7 @@ fn handle_client(
                                         insert_channel_overrides(&db, channel.id, &channel.overrides);
                                     }
 
+                                    broadcast = true;
                                     reply = Some(Packet::ChannelReceive(common::ChannelReceive {
                                         inner: common::Channel {
                                             overrides:  channel.overrides,
@@ -983,7 +984,6 @@ fn handle_client(
                                             name: channel.name
                                         }
                                     }));
-                                    broadcast = true;
                                 }
                             }
                         },
@@ -1004,6 +1004,7 @@ fn handle_client(
                                     db.execute("DELETE FROM overrides WHERE channel = ?", &[&(event.id as i64)]).unwrap();
                                     db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
 
+                                    broadcast = true;
                                     reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
                                         inner: common::Channel {
                                             id: channel.id,
@@ -1011,7 +1012,6 @@ fn handle_client(
                                             overrides: channel.overrides
                                         }
                                     }));
-                                    broadcast = true;
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
@@ -1021,87 +1021,106 @@ fn handle_client(
                             let id = get_id!();
                             rate_limit!(id, cheap);
 
-                            let channel = get_channel(&db, params.channel);
-                            // Cheap trick to break out at any time.
-                            loop {
-                                let mut stmt;
-                                let mut rows;
-                                if channel.is_none() {
-                                    reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
-                                    break;
+                            if let Some(channel) = get_channel(&db, params.channel) {
+                                if params.limit > common::LIMIT_MESSAGE_LIST {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                 } else if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions_by_user(&db, id, Some(&channel.unwrap().overrides)).unwrap(),
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
                                     common::PERM_READ
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                    break;
-                                } else if params.limit > common::LIMIT_MESSAGE_LIST {
-                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                                    break;
-                                } else if let Some(after) = params.after {
-                                    stmt = db.prepare_cached(
-                                        "SELECT * FROM messages
-                                        WHERE channel = ? AND timestamp >=
-                                        (SELECT timestamp FROM messages WHERE id = ?)
-                                        ORDER BY timestamp
-                                        LIMIT ?"
-                                    ).unwrap();
-                                    rows = stmt.query(&[
-                                        &(params.channel as i64),
-                                        &(after as i64),
-                                        &(params.limit as i64)
-                                    ]).unwrap();
-                                } else if let Some(before) = params.before {
-                                    stmt = db.prepare_cached(
-                                        "SELECT * FROM messages
-                                        WHERE channel = ? AND timestamp <=
-                                        (SELECT timestamp FROM messages WHERE id = ?)
-                                        ORDER BY timestamp
-                                        LIMIT ?"
-                                    ).unwrap();
-                                    rows = stmt.query(&[
-                                        &(params.channel as i64),
-                                        &(before as i64),
-                                        &(params.limit as i64)
-                                    ]).unwrap();
                                 } else {
-                                    stmt = db.prepare_cached(
-                                        "SELECT * FROM
-                                        (SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?)
-                                        ORDER BY timestamp"
-                                    ).unwrap();
-                                    rows = stmt.query(&[
-                                        &(params.channel as i64),
-                                        &(params.limit as i64)
-                                    ]).unwrap();
-                                };
+                                    let mut stmt;
+                                    let mut rows;
+
+                                    if let Some(after) = params.after {
+                                        stmt = db.prepare_cached(
+                                            "SELECT * FROM messages
+                                            WHERE channel = ? AND timestamp >=
+                                            (SELECT timestamp FROM messages WHERE id = ?)
+                                            ORDER BY timestamp
+                                            LIMIT ?"
+                                        ).unwrap();
+                                        rows = stmt.query(&[
+                                            &(params.channel as i64),
+                                            &(after as i64),
+                                            &(params.limit as i64)
+                                        ]).unwrap();
+                                    } else if let Some(before) = params.before {
+                                        stmt = db.prepare_cached(
+                                            "SELECT * FROM messages
+                                            WHERE channel = ? AND timestamp <=
+                                            (SELECT timestamp FROM messages WHERE id = ?)
+                                            ORDER BY timestamp
+                                            LIMIT ?"
+                                        ).unwrap();
+                                        rows = stmt.query(&[
+                                            &(params.channel as i64),
+                                            &(before as i64),
+                                            &(params.limit as i64)
+                                        ]).unwrap();
+                                    } else {
+                                        stmt = db.prepare_cached(
+                                            "SELECT * FROM
+                                            (SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT ?)
+                                            ORDER BY timestamp"
+                                        ).unwrap();
+                                        rows = stmt.query(&[
+                                            &(params.channel as i64),
+                                            &(params.limit as i64)
+                                        ]).unwrap();
+                                    };
 
 
-                                let mut sessions = sessions.borrow_mut();
-                                let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
+                                    let mut sessions = sessions.borrow_mut();
+                                    let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
 
-                                while let Some(row) = rows.next() {
-                                    let msg = get_message_by_fields(&row.unwrap());
-                                    let author = get_user(&db, msg.author).unwrap_or(common::User {
-                                        id: msg.author,
-                                        ..Default::default()
-                                    });
-                                    write(writer, Packet::MessageReceive(common::MessageReceive {
-                                        author: author,
-                                        channel: common::Channel {
-                                            id: msg.channel,
+                                    while let Some(row) = rows.next() {
+                                        let msg = get_message_by_fields(&row.unwrap());
+                                        let author = get_user(&db, msg.author).unwrap_or(common::User {
+                                            id: msg.author,
                                             ..Default::default()
-                                        },
-                                        id: msg.id,
-                                        new: false,
-                                        text: msg.text,
-                                        timestamp: msg.timestamp,
-                                        timestamp_edit: msg.timestamp_edit
+                                        });
+                                        write(writer, Packet::MessageReceive(common::MessageReceive {
+                                            author: author,
+                                            channel: common::Channel {
+                                                id: msg.channel,
+                                                ..Default::default()
+                                            },
+                                            id: msg.id,
+                                            new: false,
+                                            text: msg.text,
+                                            timestamp: msg.timestamp,
+                                            timestamp_edit: msg.timestamp_edit
+                                        }));
+                                    }
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
+                        Packet::Typing(event) => {
+                            let id = get_id!();
+                            if let Some(channel) = get_channel(&db, event.channel) {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
+                                    common::PERM_WRITE
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides);
+                                    reply = Some(Packet::TypingReceive(common::TypingReceive {
+                                        author: id,
+                                        channel: event.channel
                                     }));
                                 }
-                                break;
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
                             }
                         },
                         Packet::MessageCreate(msg) => {
@@ -1206,7 +1225,6 @@ fn handle_client(
 
                                     broadcast = true;
                                     broadcast_in = Some(channel.overrides);
-                                    // I don't see any clean way to do this without clone. Sorry :(
                                     reply = Some(Packet::MessageDeleteReceive(common::MessageDeleteReceive {
                                         id: event.id
                                     }));
@@ -1236,6 +1254,7 @@ fn handle_client(
                                             &[&ban, &(user.id as i64)]
                                         ).unwrap();
                                         sessions.borrow_mut().retain(|_, ref session| session.id != Some(user.id));
+                                        broadcast = true;
                                         reply = Some(Packet::UserReceive(common::UserReceive {
                                             inner: common::User {
                                                 attributes: old.attributes,
@@ -1245,7 +1264,6 @@ fn handle_client(
                                                 name: old.name
                                             }
                                         }));
-                                        broadcast = true;
                                     }
                                 } else if let Some(attributes) = user.attributes {
                                     if !has_perm(
@@ -1299,6 +1317,7 @@ fn handle_client(
                                                 "UPDATE users SET attributes = ? WHERE id = ?",
                                                 &[&from_list(&attributes), &(user.id as i64)]
                                             ).unwrap();
+                                            broadcast = true;
                                             reply = Some(Packet::UserReceive(common::UserReceive {
                                                 inner: common::User {
                                                     attributes: attributes,
@@ -1308,7 +1327,6 @@ fn handle_client(
                                                     name: old.name
                                                 }
                                             }));
-                                            broadcast = true;
                                         } else {
                                             reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                         }

@@ -14,7 +14,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "termion")]
 mod frontend_minimal;
@@ -72,7 +72,7 @@ fn main() {
     }
     macro_rules! readline {
         ($break:block) => {
-            match screen.readline() {
+            match screen.readline(None) {
                 Ok(ok) => ok,
                 Err(_) => $break
             }
@@ -144,7 +144,28 @@ fn main() {
     let mut editor = rustyline::Editor::<()>::new();
     loop {
         screen.repaint();
-        let input = readline!({ break; });
+        let input = {
+            let session_clone = Arc::clone(&session);
+            let mut last: Option<Instant> = None;
+            match screen.readline(Some(Box::new(move |_| {
+                if let Some(ref mut session) = *session_clone.lock().unwrap() {
+                    if let Some(channel) = session.channel {
+                        if last.is_none()
+                            || last.unwrap().elapsed() > Duration::from_secs(common::TYPING_TIMEOUT as u64 / 2) {
+
+                            let packet = Packet::Typing(common::Typing {
+                                channel: channel
+                            });
+                            let _ = common::write(&mut session.stream, &packet);
+                            last = Some(Instant::now());
+                        }
+                    }
+                }
+            }))) {
+                Ok(ok) => ok,
+                Err(_) => break
+            }
+        };
         if input.is_empty() {
             continue;
         }

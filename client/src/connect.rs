@@ -19,7 +19,7 @@ pub fn connect(
     }
     macro_rules! readline {
         ($break:block) => {
-            match screen.readline() {
+            match screen.readline(None) {
                 Ok(ok) => ok,
                 Err(_) => $break
             }
