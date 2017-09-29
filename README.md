@@ -15,11 +15,11 @@ Differences from IRC:
 
 - Bot accounts should be marked so you can see if somebody is a bot.
 - Channels can only be created with a specific permission.
+- Each account gets a (resettable) token. This token is stored on the client and used to log in with, instead of the password.
 - Message Logs are kept by default.
 - Most configuration is done from inside the application itself.
 - Nicknames are claimed using a password by default.
 - Optionally send E2E encrypted messages.
-- Passwords are sent in tokens, to store them safely on the client.
 
 ## Why not Discord?
 
