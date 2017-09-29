@@ -26,7 +26,6 @@ Differences from IRC:
 Honestly, this whole thing is basically a Discord copy-cat.  
 Differences from Discord:
 
-- Bot accounts benefit from a command API which makes arguments it easy and consistent to parse.
 - Bot accounts have a separate permission from @everyone, so you can deny bots the ability to read message easier.
 - No terms of service. Do what you want.
 - No voice support or direct messages.
