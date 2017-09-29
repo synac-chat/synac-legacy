@@ -54,9 +54,9 @@ struct Config {
     limit_user_name_max: usize,
     limit_channel_name_min: usize,
     limit_channel_name_max: usize,
-    limit_attribute_name_min: usize,
-    limit_attribute_name_max: usize,
-    limit_attribute_amount_max: usize,
+    limit_group_name_min: usize,
+    limit_group_name_max: usize,
+    limit_group_amount_max: usize,
     limit_message_min: usize,
     limit_message_max: usize
 }
@@ -70,9 +70,9 @@ fn main() {
         return;
     });
     db.execute("CREATE TABLE IF NOT EXISTS users (
-                    attributes  TEXT NOT NULL DEFAULT '',
                     ban         INTEGER NOT NULL DEFAULT 0,
                     bot         INTEGER NOT NULL,
+                    groups      TEXT NOT NULL DEFAULT '',
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     last_ip     TEXT NOT NULL,
                     name        TEXT NOT NULL,
@@ -80,7 +80,7 @@ fn main() {
                     token       TEXT NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    db.execute("CREATE TABLE IF NOT EXISTS attributes (
+    db.execute("CREATE TABLE IF NOT EXISTS groups (
                     allow   INTEGER NOT NULL,
                     deny    INTEGER NOT NULL,
                     id      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -89,8 +89,8 @@ fn main() {
                     unassignable    INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 1, '@humans', 0, 1)", &[]).unwrap();
-    db.execute("INSERT OR IGNORE INTO attributes VALUES (3, 0, 2, '@bots',   0, 1)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO groups VALUES (3, 0, 1, '@humans', 0, 1)", &[]).unwrap();
+    db.execute("INSERT OR IGNORE INTO groups VALUES (3, 0, 2, '@bots',   0, 1)", &[]).unwrap();
     db.execute("CREATE TABLE IF NOT EXISTS channels (
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     name        TEXT NOT NULL
@@ -98,9 +98,9 @@ fn main() {
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS overrides (
                     allow       INTEGER NOT NULL,
-                    attribute   INTEGER NOT NULL,
                     channel     INTEGER NOT NULL,
-                    deny        INTEGER NOT NULL
+                    deny        INTEGER NOT NULL,
+                    [group]     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS messages (
@@ -192,8 +192,8 @@ fn main() {
             }
             if is_invalid!(limit_user_name_min, limit_user_name_max, common::LIMIT_USER_NAME)
                 || is_invalid!(limit_channel_name_min, limit_channel_name_max, common::LIMIT_CHANNEL_NAME)
-                || is_invalid!(limit_attribute_name_min, limit_attribute_name_max, common::LIMIT_ATTR_NAME)
-                || config.limit_attribute_amount_max > common::LIMIT_ATTR_AMOUNT
+                || is_invalid!(limit_group_name_min, limit_group_name_max, common::LIMIT_ATTR_NAME)
+                || config.limit_group_amount_max > common::LIMIT_ATTR_AMOUNT
                 || is_invalid!(limit_message_min, limit_message_max, common::LIMIT_MESSAGE) {
 
                 eprintln!("Your config is exceeding a hard limit");
@@ -211,9 +211,9 @@ fn main() {
                 limit_user_name_max: 32,
                 limit_channel_name_min: 1,
                 limit_channel_name_max: 32,
-                limit_attribute_name_min: 1,
-                limit_attribute_name_max: 32,
-                limit_attribute_amount_max: 128,
+                limit_group_name_min: 1,
+                limit_group_name_max: 32,
+                limit_group_amount_max: 128,
                 limit_message_min: 1,
                 limit_message_max: 1024
             };
@@ -316,70 +316,6 @@ fn main() {
 pub const TOKEN_CHARS: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 pub const RESERVED_ROLES: usize = 2;
 
-fn gen_token() -> Result<String, openssl::error::ErrorStack> {
-    let mut token = vec![0; 64];
-    rand::rand_bytes(&mut token)?;
-    for byte in &mut token {
-        *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
-    }
-
-    Ok(unsafe { String::from_utf8_unchecked(token) })
-}
-fn has_perm(config: &Config, user: usize, bitmask: u8, perm: u8) -> bool {
-    config.owner_id == user || bitmask & perm == perm
-}
-fn get_list(input: &str) -> Vec<usize> {
-    input.split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.parse().expect("The database is broken. Congratz. You made me crash."))
-        .collect()
-}
-fn from_list(input: &[usize]) -> String {
-    input.iter().fold(String::new(), |mut acc, item| {
-        if !acc.is_empty() { acc.push(','); }
-        acc.push_str(&item.to_string());
-        acc
-    })
-}
-fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
-    let mut stmt = db.prepare_cached("SELECT * FROM users WHERE id = ?").unwrap();
-    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-
-    if let Some(row) = rows.next() {
-        Some(get_user_by_fields(&row.unwrap()))
-    } else {
-        None
-    }
-}
-fn get_user_by_fields(row: &SqlRow) -> common::User {
-    common::User {
-        attributes: get_list(&row.get::<_, String>(0)),
-        ban: row.get(1),
-        bot: row.get(2),
-        id: row.get::<_, i64>(3) as usize,
-        name: row.get(5)
-    }
-}
-fn get_attribute(db: &SqlConnection, id: usize) -> Option<common::Attribute> {
-    let mut stmt = db.prepare_cached("SELECT * FROM attributes WHERE id = ?").unwrap();
-    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-    if let Some(row) = rows.next() {
-        let row = row.unwrap();
-        Some(get_attribute_by_fields(&row))
-    } else {
-        None
-    }
-}
-fn get_attribute_by_fields(row: &SqlRow) -> common::Attribute {
-    common::Attribute {
-        allow: row.get(0),
-        deny: row.get(1),
-        id: row.get::<_, i64>(2) as usize,
-        name: row.get(3),
-        pos:  row.get::<_, i64>(4) as usize,
-        unassignable: row.get(5)
-    }
-}
 fn calculate_permissions(
         db: &SqlConnection,
         bot: bool,
@@ -387,7 +323,7 @@ fn calculate_permissions(
         chan_overrides: Option<&HashMap<usize, (u8, u8)>>
     ) -> u8 {
     let mut query = String::with_capacity(48+3+1+14);
-    query.push_str("SELECT allow, deny FROM attributes WHERE id IN (");
+    query.push_str("SELECT allow, deny FROM groups WHERE id IN (");
     query.push_str(if bot { "2" } else { "1" });
     if !ids.is_empty() { query.push_str(", "); }
     query.push_str(&from_list(ids));
@@ -415,86 +351,18 @@ fn calculate_permissions_by_user(
         id: usize,
         chan_overrides: Option<&HashMap<usize, (u8, u8)>>
     ) -> Option<u8> {
-    let mut stmt = db.prepare_cached("SELECT attributes, bot FROM users WHERE id = ?").unwrap();
+    let mut stmt = db.prepare_cached("SELECT bot, groups FROM users WHERE id = ?").unwrap();
     let mut rows = stmt.query(&[&(id as i64)]).unwrap();
 
     if let Some(row) = rows.next() {
         let row = row.unwrap();
         // Yes I realize I could pass row.get(0) directly.
         // However, what about SQL injections?
-        Some(calculate_permissions(db, row.get(1), &get_list(&row.get::<_, String>(0)), chan_overrides))
+        Some(calculate_permissions(db, row.get(0), &get_list(&row.get::<_, String>(1)), chan_overrides))
     } else {
         None
     }
 }
-fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
-    let mut stmt = db.prepare_cached("SELECT * FROM channels WHERE id = ?").unwrap();
-    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-    if let Some(row) = rows.next() {
-        let row = row.unwrap();
-        Some(get_channel_by_fields(db, &row))
-    } else {
-        None
-    }
-}
-fn get_channel_by_fields(db: &SqlConnection, row: &SqlRow) -> common::Channel {
-    let id = row.get::<_, i64>(0);
-
-    let mut stmt = db.prepare_cached("SELECT allow, attribute, deny FROM overrides WHERE channel = ?").unwrap();
-    let mut rows = stmt.query(&[&id]).unwrap();
-
-    let mut overrides = HashMap::new();
-
-    while let Some(row) = rows.next() {
-        let row = row.unwrap();
-        overrides.insert(row.get::<_, i64>(1) as usize, (row.get(0), row.get(2)));
-    }
-
-    common::Channel {
-        overrides: overrides,
-        id: id as usize,
-        name: row.get(1)
-    }
-}
-fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &HashMap<usize, (u8, u8)>) {
-    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(channel as i64)]).unwrap();
-
-    let mut stmt_exists = db.prepare_cached("SELECT COUNT(*) FROM attributes WHERE id = ?") .unwrap();
-    let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, attribute, channel, deny) VALUES (?, ?, ?, ?)")
-        .unwrap();
-
-    for (id, &(allow, deny)) in overrides {
-        let count: i64 = stmt_exists.query_row(
-            &[&(*id as i64)],
-            |row| row.get(0)
-        ).unwrap();
-        if count as usize > 0 {
-            stmt_insert.execute(&[&allow, &(*id as i64), &(channel as i64), &deny]).unwrap();
-        }
-    }
-}
-fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
-    let mut stmt = db.prepare_cached("SELECT * FROM messages WHERE id = ?")
-        .unwrap();
-    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-    if let Some(row) = rows.next() {
-        let row = row.unwrap();
-        Some(get_message_by_fields(&row))
-    } else {
-        None
-    }
-}
-fn get_message_by_fields(row: &SqlRow) -> common::Message {
-    common::Message {
-        author: row.get::<_, i64>(0) as usize,
-        channel: row.get::<_, i64>(1) as usize,
-        id: row.get::<_, i64>(2) as usize,
-        text: row.get(3),
-        timestamp: row.get(4),
-        timestamp_edit: row.get(5)
-    }
-}
-
 fn check_rate_limits(config: &Config, expensive: bool, session: &mut UserSession) -> Option<u64> {
     let (duration, amount, packet_time, packets) = if expensive {
         (
@@ -526,7 +394,137 @@ fn check_rate_limits(config: &Config, expensive: bool, session: &mut UserSession
     }
     None
 }
+fn from_list(input: &[usize]) -> String {
+    input.iter().fold(String::new(), |mut acc, item| {
+        if !acc.is_empty() { acc.push(','); }
+        acc.push_str(&item.to_string());
+        acc
+    })
+}
+fn gen_token() -> Result<String, openssl::error::ErrorStack> {
+    let mut token = vec![0; 64];
+    rand::rand_bytes(&mut token)?;
+    for byte in &mut token {
+        *byte = TOKEN_CHARS[*byte as usize % TOKEN_CHARS.len()];
+    }
 
+    Ok(unsafe { String::from_utf8_unchecked(token) })
+}
+fn get_channel(db: &SqlConnection, id: usize) -> Option<common::Channel> {
+    let mut stmt = db.prepare_cached("SELECT * FROM channels WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+        Some(get_channel_by_fields(db, &row))
+    } else {
+        None
+    }
+}
+fn get_channel_by_fields(db: &SqlConnection, row: &SqlRow) -> common::Channel {
+    let id = row.get::<_, i64>(0);
+
+    let mut stmt = db.prepare_cached("SELECT [group], allow, deny FROM overrides WHERE channel = ?").unwrap();
+    let mut rows = stmt.query(&[&id]).unwrap();
+
+    let mut overrides = HashMap::new();
+
+    while let Some(row) = rows.next() {
+        let row = row.unwrap();
+        overrides.insert(row.get::<_, i64>(0) as usize, (row.get(1), row.get(2)));
+    }
+
+    common::Channel {
+        id: id as usize,
+        name: row.get(1),
+        overrides: overrides
+    }
+}
+fn get_group(db: &SqlConnection, id: usize) -> Option<common::Group> {
+    let mut stmt = db.prepare_cached("SELECT * FROM groups WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+        Some(get_group_by_fields(&row))
+    } else {
+        None
+    }
+}
+fn get_group_by_fields(row: &SqlRow) -> common::Group {
+    common::Group {
+        allow: row.get(0),
+        deny: row.get(1),
+        id: row.get::<_, i64>(2) as usize,
+        name: row.get(3),
+        pos:  row.get::<_, i64>(4) as usize,
+        unassignable: row.get(5)
+    }
+}
+fn get_list(input: &str) -> Vec<usize> {
+    input.split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().expect("The database is broken. Congratz. You made me crash."))
+        .collect()
+}
+fn get_message(db: &SqlConnection, id: usize) -> Option<common::Message> {
+    let mut stmt = db.prepare_cached("SELECT * FROM messages WHERE id = ?")
+        .unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+    if let Some(row) = rows.next() {
+        let row = row.unwrap();
+        Some(get_message_by_fields(&row))
+    } else {
+        None
+    }
+}
+fn get_message_by_fields(row: &SqlRow) -> common::Message {
+    common::Message {
+        author: row.get::<_, i64>(0) as usize,
+        channel: row.get::<_, i64>(1) as usize,
+        id: row.get::<_, i64>(2) as usize,
+        text: row.get(3),
+        timestamp: row.get(4),
+        timestamp_edit: row.get(5)
+    }
+}
+fn get_user(db: &SqlConnection, id: usize) -> Option<common::User> {
+    let mut stmt = db.prepare_cached("SELECT * FROM users WHERE id = ?").unwrap();
+    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+
+    if let Some(row) = rows.next() {
+        Some(get_user_by_fields(&row.unwrap()))
+    } else {
+        None
+    }
+}
+fn get_user_by_fields(row: &SqlRow) -> common::User {
+    common::User {
+        ban: row.get(0),
+        bot: row.get(1),
+        groups: get_list(&row.get::<_, String>(2)),
+        id: row.get::<_, i64>(3) as usize,
+        name: row.get(5)
+    }
+}
+fn has_perm(config: &Config, user: usize, bitmask: u8, perm: u8) -> bool {
+    config.owner_id == user || bitmask & perm == perm
+}
+fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &HashMap<usize, (u8, u8)>) {
+    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(channel as i64)]).unwrap();
+
+    let mut stmt_exists = db.prepare_cached("SELECT COUNT(*) FROM groups WHERE id = ?") .unwrap();
+    let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, channel, deny, group) VALUES (?, ?, ?, ?)")
+        .unwrap();
+
+    for (id, &(allow, deny)) in overrides {
+        let count: i64 = stmt_exists.query_row(
+            &[&(*id as i64)],
+            |row| row.get(0)
+        ).unwrap();
+        if count as usize > 0 {
+            stmt_insert.execute(&[&allow, &(*id as i64), &(channel as i64), &deny]).unwrap();
+        }
+    }
+}
 fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
     attempt_or!(common::write(writer, &packet), {
         eprintln!("Failed to send reply");
@@ -653,6 +651,263 @@ fn handle_client(
 
                     match packet {
                         Packet::Close => { close!(); }
+                        Packet::ChannelCreate(channel) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if channel.name.len() < config.limit_channel_name_min
+                                || channel.name.len() > config.limit_channel_name_max
+                                || channel.overrides.len() > config.limit_group_amount_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
+                                common::PERM_MANAGE_CHANNELS
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                            } else {
+                                db.execute(
+                                    "INSERT INTO channels (name) VALUES (?)",
+                                    &[&channel.name]
+                                ).unwrap();
+                                let channel_id = db.last_insert_rowid() as usize;
+                                insert_channel_overrides(&db, channel_id, &channel.overrides);
+
+                                broadcast = true;
+                                reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                    inner: common::Channel {
+                                        overrides:  channel.overrides,
+                                        id: channel_id,
+                                        name: channel.name
+                                    }
+                                }));
+                            }
+                        },
+                        Packet::ChannelDelete(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if let Some(channel) = get_channel(&db, event.id) {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute("DELETE FROM messages WHERE channel = ?", &[&(event.id as i64)]).unwrap();
+                                    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(event.id as i64)]).unwrap();
+                                    db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
+
+                                    broadcast = true;
+                                    reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
+                                        inner: common::Channel {
+                                            id: channel.id,
+                                            name: channel.name,
+                                            overrides: channel.overrides
+                                        }
+                                    }));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
+                        Packet::ChannelUpdate(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            let channel = event.inner;
+                            if channel.name.len() < config.limit_channel_name_min
+                                || channel.name.len() > config.limit_channel_name_max
+                                || channel.overrides.len() > config.limit_group_amount_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(old) = get_channel(&db, channel.id) {
+                                if !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions_by_user(&db, id, Some(&old.overrides)).unwrap(),
+                                    common::PERM_MANAGE_CHANNELS
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "UPDATE channels SET name = ? WHERE id = ?",
+                                        &[&channel.name, &(channel.id as i64)]
+                                    ).unwrap();
+                                    if !event.keep_overrides {
+                                        insert_channel_overrides(&db, channel.id, &channel.overrides);
+                                    }
+
+                                    broadcast = true;
+                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
+                                        inner: common::Channel {
+                                            overrides:  channel.overrides,
+                                            id: channel.id,
+                                            name: channel.name
+                                        }
+                                    }));
+                                }
+                            }
+                        },
+                        Packet::GroupCreate(attr) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if attr.name.len() < config.limit_group_name_min
+                                || attr.name.len() > config.limit_group_name_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
+                                common::PERM_MANAGE_GROUPS
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                            } else {
+                                let (count, max): (i64, i64) = db.query_row(
+                                    "SELECT COUNT(*), MAX(pos) FROM groups",
+                                    &[],
+                                    |row| (row.get(0), row.get(1))
+                                ).unwrap();
+
+                                if count as usize + 1 > config.limit_group_amount_max {
+                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                                } else if attr.pos == 0 || attr.pos > max as usize + 1 {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                                } else {
+                                    db.execute(
+                                        "UPDATE groups SET pos = pos + 1 WHERE pos >= ?",
+                                        &[&(attr.pos as i64)]
+                                    ).unwrap();
+                                    db.execute(
+                                        "INSERT INTO groups (allow, deny, name, pos, unassignable)
+                                        VALUES (?, ?, ?, ?, ?)",
+                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64),
+                                        &attr.unassignable]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    reply = Some(Packet::GroupReceive(common::GroupReceive {
+                                        inner: common::Group {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: db.last_insert_rowid() as usize,
+                                            name: attr.name,
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
+                                        },
+                                        new: true
+                                    }));
+                                }
+                            }
+                        },
+                        Packet::GroupDelete(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
+                                common::PERM_MANAGE_GROUPS
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                            } else if let Some(attr) = get_group(&db, event.id) {
+                                if attr.pos == 0 {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                                } else {
+                                    db.execute(
+                                        "DELETE FROM overrides WHERE [group] = ?",
+                                        &[&(attr.id as i64)]
+                                    ).unwrap();
+                                    db.execute(
+                                        "UPDATE groups SET pos = pos - 1 WHERE pos > ?",
+                                        &[&(attr.pos as i64)]
+                                    ).unwrap();
+                                    db.execute(
+                                        "DELETE FROM groups WHERE id = ?",
+                                        &[&(attr.id as i64)]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    reply = Some(Packet::GroupDeleteReceive(common::GroupDeleteReceive {
+                                        inner: common::Group {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: attr.id,
+                                            name: attr.name,
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
+                                        }
+                                    }));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_GROUP));
+                            }
+                        },
+                        Packet::GroupUpdate(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            let attr = event.inner;
+                            if attr.name.len() < config.limit_group_name_min
+                                || attr.name.len() > config.limit_group_name_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if !has_perm(
+                                &config,
+                                id,
+                                calculate_permissions_by_user(&db, id, None).unwrap(),
+                                common::PERM_MANAGE_GROUPS
+                            ) {
+                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                            } else if let Some(old) = get_group(&db, attr.id) {
+                                let max: i64 = db.query_row(
+                                    "SELECT MAX(pos) FROM groups",
+                                    &[],
+                                    |row| row.get(0)
+                                ).unwrap();
+
+                                if (attr.pos == 0 && old.pos != 0) || attr.pos > max as usize {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                                } else if attr.pos == 0 && attr.name != old.name {
+                                    reply = Some(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
+                                } else {
+                                    if attr.pos > old.pos {
+                                        db.execute(
+                                            "UPDATE groups SET pos = pos - 1 WHERE pos > ? AND pos <= ?",
+                                            &[&(old.pos as i64), &(attr.pos as i64)]
+                                        ).unwrap();
+                                    } else if attr.pos < old.pos {
+                                        db.execute(
+                                            "UPDATE groups SET pos = pos + 1 WHERE pos >= ? AND pos < ?",
+                                            &[&(attr.pos as i64), &(old.pos as i64)]
+                                        ).unwrap();
+                                    }
+                                    db.execute(
+                                        "UPDATE groups SET
+                                        allow = ?, deny = ?, name = ?, pos = ?, unassignable = ?
+                                        WHERE id = ?",
+                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &attr.unassignable,
+                                        &(attr.id as i64)]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    reply = Some(Packet::GroupReceive(common::GroupReceive {
+                                        inner: common::Group {
+                                            allow: attr.allow,
+                                            deny: attr.deny,
+                                            id: attr.id,
+                                            name: attr.name,
+                                            pos: attr.pos,
+                                            unassignable: attr.unassignable
+                                        },
+                                        new: true
+                                    }));
+                                }
+                            }
+                        },
                         Packet::Login(login) => {
                             let mut stmt = db.prepare_cached(
                                 "SELECT id, ban, bot, token, password FROM users WHERE name = ?"
@@ -748,9 +1003,9 @@ fn handle_client(
                                     broadcast = true;
                                     reply = Some(Packet::UserReceive(common::UserReceive {
                                         inner: common::User {
-                                            attributes: Vec::new(),
                                             ban: false,
                                             bot: login.bot,
+                                            groups: Vec::new(),
                                             id: id,
                                             name: login.name
                                         }
@@ -760,261 +1015,163 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
                             }
                         },
-                        Packet::AttributeCreate(attr) => {
+                        Packet::LoginUpdate(login) => {
+                            let mut reset_token = login.reset_token;
                             let id = get_id!();
-                            rate_limit!(id, cheap);
+                            rate_limit!(id, reset_token
+                                        || (login.password_current.is_some()
+                                        && login.password_new.is_some()));
 
-                            if attr.name.len() < config.limit_attribute_name_min
-                                || attr.name.len() > config.limit_attribute_name_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, None).unwrap(),
-                                common::PERM_MANAGE_ATTRIBUTES
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                            } else {
-                                let (count, max): (i64, i64) = db.query_row(
-                                    "SELECT COUNT(*), MAX(pos) FROM attributes",
-                                    &[],
-                                    |row| (row.get(0), row.get(1))
-                                ).unwrap();
-
-                                if count as usize + 1 > config.limit_attribute_amount_max {
-                                    reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                                } else if attr.pos == 0 || attr.pos > max as usize + 1 {
-                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
-                                } else {
-                                    db.execute(
-                                        "UPDATE attributes SET pos = pos + 1 WHERE pos >= ?",
-                                        &[&(attr.pos as i64)]
-                                    ).unwrap();
-                                    db.execute(
-                                        "INSERT INTO attributes (allow, deny, name, pos, unassignable)
-                                        VALUES (?, ?, ?, ?, ?)",
-                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64),
-                                        &attr.unassignable]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
-                                        inner: common::Attribute {
-                                            allow: attr.allow,
-                                            deny: attr.deny,
-                                            id: db.last_insert_rowid() as usize,
-                                            name: attr.name,
-                                            pos: attr.pos,
-                                            unassignable: attr.unassignable
-                                        },
-                                        new: true
-                                    }));
-                                }
+                            if let Some(name) = login.name {
+                                db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
                             }
-                        },
-                        Packet::AttributeUpdate(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            let attr = event.inner;
-                            if attr.name.len() < config.limit_attribute_name_min
-                                || attr.name.len() > config.limit_attribute_name_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, None).unwrap(),
-                                common::PERM_MANAGE_ATTRIBUTES
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                            } else if let Some(old) = get_attribute(&db, attr.id) {
-                                let max: i64 = db.query_row(
-                                    "SELECT MAX(pos) FROM attributes",
-                                    &[],
-                                    |row| row.get(0)
-                                ).unwrap();
-
-                                if (attr.pos == 0 && old.pos != 0) || attr.pos > max as usize {
-                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
-                                } else if attr.pos == 0 && attr.name != old.name {
-                                    reply = Some(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
-                                } else {
-                                    if attr.pos > old.pos {
-                                        db.execute(
-                                            "UPDATE attributes SET pos = pos - 1 WHERE pos > ? AND pos <= ?",
-                                            &[&(old.pos as i64), &(attr.pos as i64)]
-                                        ).unwrap();
-                                    } else if attr.pos < old.pos {
-                                        db.execute(
-                                            "UPDATE attributes SET pos = pos + 1 WHERE pos >= ? AND pos < ?",
-                                            &[&(attr.pos as i64), &(old.pos as i64)]
-                                        ).unwrap();
+                            if let Some(current) = login.password_current {
+                                if let Some(new) = login.password_new {
+                                    let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();
+                                    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+                                    let password: String = rows.next().unwrap().unwrap().get(0);
+                                    let valid = attempt_or!(bcrypt::verify(&current, &password), {
+                                        eprintln!("Failed to verify password");
+                                        close!();
+                                    });
+                                    if valid {
+                                        let hash = attempt_or!(bcrypt::hash(&new, bcrypt::DEFAULT_COST), {
+                                            eprintln!("Failed to hash password");
+                                            close!();
+                                        });
+                                        db.execute("UPDATE users SET password = ? WHERE id = ?", &[&hash, &(id as i64)])
+                                            .unwrap();
+                                        reset_token = true;
+                                    } else {
+                                        reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
+                                        reset_token = false;
                                     }
-                                    db.execute(
-                                        "UPDATE attributes SET
-                                        allow = ?, deny = ?, name = ?, pos = ?, unassignable = ?
-                                        WHERE id = ?",
-                                        &[&attr.allow, &attr.deny, &attr.name, &(attr.pos as i64), &attr.unassignable,
-                                        &(attr.id as i64)]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    reply = Some(Packet::AttributeReceive(common::AttributeReceive {
-                                        inner: common::Attribute {
-                                            allow: attr.allow,
-                                            deny: attr.deny,
-                                            id: attr.id,
-                                            name: attr.name,
-                                            pos: attr.pos,
-                                            unassignable: attr.unassignable
-                                        },
-                                        new: true
-                                    }));
-                                }
-                            }
-                        },
-                        Packet::AttributeDelete(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, None).unwrap(),
-                                common::PERM_MANAGE_ATTRIBUTES
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                            } else if let Some(attr) = get_attribute(&db, event.id) {
-                                if attr.pos == 0 {
-                                    reply = Some(Packet::Err(common::ERR_ATTR_INVALID_POS));
                                 } else {
-                                    db.execute(
-                                        "DELETE FROM overrides WHERE attribute = ?",
-                                        &[&(attr.id as i64)]
-                                    ).unwrap();
-                                    db.execute(
-                                        "UPDATE attributes SET pos = pos - 1 WHERE pos > ?",
-                                        &[&(attr.pos as i64)]
-                                    ).unwrap();
-                                    db.execute(
-                                        "DELETE FROM attributes WHERE id = ?",
-                                        &[&(attr.id as i64)]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    reply = Some(Packet::AttributeDeleteReceive(common::AttributeDeleteReceive {
-                                        inner: common::Attribute {
-                                            allow: attr.allow,
-                                            deny: attr.deny,
-                                            id: attr.id,
-                                            name: attr.name,
-                                            pos: attr.pos,
-                                            unassignable: attr.unassignable
-                                        }
-                                    }));
+                                    reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
+                                    reset_token = false;
                                 }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_ATTRIBUTE));
                             }
-                        },
-                        Packet::ChannelCreate(channel) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if channel.name.len() < config.limit_channel_name_min
-                                || channel.name.len() > config.limit_channel_name_max
-                                || channel.overrides.len() > config.limit_attribute_amount_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if !has_perm(
-                                &config,
-                                id,
-                                calculate_permissions_by_user(&db, id, None).unwrap(),
-                                common::PERM_MANAGE_CHANNELS
-                            ) {
-                                reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                            } else {
-                                db.execute(
-                                    "INSERT INTO channels (name) VALUES (?)",
-                                    &[&channel.name]
-                                ).unwrap();
-                                let channel_id = db.last_insert_rowid() as usize;
-                                insert_channel_overrides(&db, channel_id, &channel.overrides);
-
-                                broadcast = true;
-                                reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                    inner: common::Channel {
-                                        overrides:  channel.overrides,
-                                        id: channel_id,
-                                        name: channel.name
-                                    }
+                            if reset_token {
+                                let token = attempt_or!(gen_token(), {
+                                    eprintln!("Failed to generate random token");
+                                    close!();
+                                });
+                                db.execute("UPDATE users SET token = ? WHERE id = ?", &[&token, &(id as i64)]).unwrap();
+                                reply = Some(Packet::LoginSuccess(common::LoginSuccess {
+                                    created: false,
+                                    id: id,
+                                    token: token
                                 }));
                             }
                         },
-                        Packet::ChannelUpdate(event) => {
+                        Packet::MessageCreate(msg) => {
                             let id = get_id!();
                             rate_limit!(id, cheap);
 
-                            let channel = event.inner;
-                            if channel.name.len() < config.limit_channel_name_min
-                                || channel.name.len() > config.limit_channel_name_max
-                                || channel.overrides.len() > config.limit_attribute_amount_max {
+                            if msg.text.len() < config.limit_message_min
+                                || msg.text.len() > config.limit_message_max {
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if let Some(old) = get_channel(&db, channel.id) {
+                            } else if let Some(channel) = get_channel(&db, msg.channel) {
+                                let timestamp = Utc::now().timestamp();
+                                let user = get_user(&db, id).unwrap();
+
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions_by_user(&db, id, Some(&old.overrides)).unwrap(),
-                                    common::PERM_MANAGE_CHANNELS
+                                    calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
+                                    common::PERM_WRITE
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
-                                        "UPDATE channels SET name = ? WHERE id = ?",
-                                        &[&channel.name, &(channel.id as i64)]
+                                        "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
+                                        &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
                                     ).unwrap();
-                                    if !event.keep_overrides {
-                                        insert_channel_overrides(&db, channel.id, &channel.overrides);
-                                    }
 
                                     broadcast = true;
-                                    reply = Some(Packet::ChannelReceive(common::ChannelReceive {
-                                        inner: common::Channel {
-                                            overrides:  channel.overrides,
-                                            id: channel.id,
-                                            name: channel.name
-                                        }
-                                    }));
-                                }
-                            }
-                        },
-                        Packet::ChannelDelete(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if let Some(channel) = get_channel(&db, event.id) {
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
-                                    common::PERM_MANAGE_CHANNELS
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    db.execute("DELETE FROM messages WHERE channel = ?", &[&(event.id as i64)]).unwrap();
-                                    db.execute("DELETE FROM overrides WHERE channel = ?", &[&(event.id as i64)]).unwrap();
-                                    db.execute("DELETE FROM channels WHERE id = ?", &[&(event.id as i64)]).unwrap();
-
-                                    broadcast = true;
-                                    reply = Some(Packet::ChannelDeleteReceive(common::ChannelDeleteReceive {
-                                        inner: common::Channel {
-                                            id: channel.id,
-                                            name: channel.name,
-                                            overrides: channel.overrides
-                                        }
+                                    broadcast_in = Some(channel.overrides.clone());
+                                    // I don't see any clean way to do this without clone. Sorry :(
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        author: user,
+                                        channel: channel,
+                                        id: db.last_insert_rowid() as usize,
+                                        new: true,
+                                        text: msg.text,
+                                        timestamp: timestamp,
+                                        timestamp_edit: None
                                     }));
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
+                        Packet::MessageDelete(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if let Some(msg) = get_message(&db, event.id) {
+                                let user = get_user(&db, id).unwrap();
+                                let channel = get_channel(&db, id).unwrap();
+
+                                if msg.author != id && !has_perm(
+                                    &config,
+                                    id,
+                                    calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
+                                    common::PERM_MANAGE_MESSAGES
+                                ) {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    db.execute(
+                                        "DELETE FROM messages WHERE id = ?",
+                                        &[&(event.id as i64)]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides);
+                                    reply = Some(Packet::MessageDeleteReceive(common::MessageDeleteReceive {
+                                        id: event.id
+                                    }));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
+                            }
+                        },
+                        Packet::MessageUpdate(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if event.text.len() < config.limit_message_min
+                                || event.text.len() > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(msg) = get_message(&db, event.id) {
+                                let timestamp = Utc::now().timestamp();
+
+                                if msg.author != id {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    let channel = get_channel(&db, id).unwrap();
+                                    let user = get_user(&db, id).unwrap();
+
+                                    db.execute(
+                                        "UPDATE messages SET text = ? WHERE id = ?",
+                                        &[&event.text, &(event.id as i64)]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides.clone());
+                                    // I don't see any clean way to do this without clone. Sorry :(
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        author: user,
+                                        channel: channel,
+                                        id: event.id,
+                                        new: true,
+                                        text: event.text,
+                                        timestamp: msg.timestamp,
+                                        timestamp_edit: Some(timestamp)
+                                    }));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
                         Packet::MessageList(params) => {
@@ -1123,116 +1280,6 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
                             }
                         },
-                        Packet::MessageCreate(msg) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if msg.text.len() < config.limit_message_min
-                                || msg.text.len() > config.limit_message_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if let Some(channel) = get_channel(&db, msg.channel) {
-                                let timestamp = Utc::now().timestamp();
-                                let user = get_user(&db, id).unwrap();
-
-                                if !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions(&db, user.bot, &user.attributes, Some(&channel.overrides)),
-                                    common::PERM_WRITE
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    db.execute(
-                                        "INSERT INTO messages (author, channel, text, timestamp) VALUES (?, ?, ?, ?)",
-                                        &[&(id as i64), &(msg.channel as i64), &msg.text, &timestamp]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    broadcast_in = Some(channel.overrides.clone());
-                                    // I don't see any clean way to do this without clone. Sorry :(
-                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        author: user,
-                                        channel: channel,
-                                        id: db.last_insert_rowid() as usize,
-                                        new: true,
-                                        text: msg.text,
-                                        timestamp: timestamp,
-                                        timestamp_edit: None
-                                    }));
-                                }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
-                            }
-                        },
-                        Packet::MessageUpdate(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if event.text.len() < config.limit_message_min
-                                || event.text.len() > config.limit_message_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if let Some(msg) = get_message(&db, event.id) {
-                                let timestamp = Utc::now().timestamp();
-
-                                if msg.author != id {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    let channel = get_channel(&db, id).unwrap();
-                                    let user = get_user(&db, id).unwrap();
-
-                                    db.execute(
-                                        "UPDATE messages SET text = ? WHERE id = ?",
-                                        &[&event.text, &(event.id as i64)]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    broadcast_in = Some(channel.overrides.clone());
-                                    // I don't see any clean way to do this without clone. Sorry :(
-                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        author: user,
-                                        channel: channel,
-                                        id: event.id,
-                                        new: true,
-                                        text: event.text,
-                                        timestamp: msg.timestamp,
-                                        timestamp_edit: Some(timestamp)
-                                    }));
-                                }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
-                            }
-                        },
-                        Packet::MessageDelete(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if let Some(msg) = get_message(&db, event.id) {
-                                let user = get_user(&db, id).unwrap();
-                                let channel = get_channel(&db, id).unwrap();
-
-                                if msg.author != id && !has_perm(
-                                    &config,
-                                    id,
-                                    calculate_permissions(&db, user.bot, &user.attributes, Some(&channel.overrides)),
-                                    common::PERM_MANAGE_MESSAGES
-                                ) {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    db.execute(
-                                        "DELETE FROM messages WHERE id = ?",
-                                        &[&(event.id as i64)]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    broadcast_in = Some(channel.overrides);
-                                    reply = Some(Packet::MessageDeleteReceive(common::MessageDeleteReceive {
-                                        id: event.id
-                                    }));
-                                }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
-                            }
-                        },
                         Packet::UserUpdate(user) => {
                             let id = get_id!();
                             rate_limit!(id, cheap);
@@ -1257,32 +1304,32 @@ fn handle_client(
                                         broadcast = true;
                                         reply = Some(Packet::UserReceive(common::UserReceive {
                                             inner: common::User {
-                                                attributes: old.attributes,
                                                 ban:  ban,
                                                 bot:  old.bot,
+                                                groups: old.groups,
                                                 id:   old.id,
                                                 name: old.name
                                             }
                                         }));
                                     }
-                                } else if let Some(attributes) = user.attributes {
+                                } else if let Some(groups) = user.groups {
                                     if !has_perm(
                                         &config,
                                         id,
                                         calculate_permissions_by_user(&db, id, None).unwrap(),
-                                        common::PERM_ASSIGN_ATTRIBUTES
+                                        common::PERM_ASSIGN_GROUPS
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
                                     } else {
                                         let mut changed = Vec::new();
 
-                                        for attr in &attributes {
-                                            if !old.attributes.contains(attr) {
+                                        for attr in &groups {
+                                            if !old.groups.contains(attr) {
                                                 changed.push(*attr);
                                             }
                                         }
-                                        for attr in &old.attributes {
-                                            if !attributes.contains(attr) {
+                                        for attr in &old.groups {
+                                            if !groups.contains(attr) {
                                                 changed.push(*attr);
                                             }
                                         }
@@ -1299,12 +1346,12 @@ fn handle_client(
                                         } else if !changed.is_empty() {
                                             let mut query = String::with_capacity(45+1+35);
 
-                                            query.push_str("SELECT COUNT(*) FROM attributes WHERE id IN (");
+                                            query.push_str("SELECT COUNT(*) FROM groups WHERE id IN (");
                                             query.push_str(&from_list(&changed));
                                             query.push_str(") AND unassignable = 0 AND pos != 0");
-                                            if !old.attributes.is_empty() {
-                                                query.push_str(" AND pos < (SELECT MAX(pos) FROM attributes WHERE id IN (");
-                                                query.push_str(&from_list(&old.attributes));
+                                            if !old.groups.is_empty() {
+                                                query.push_str(" AND pos < (SELECT MAX(pos) FROM groups WHERE id IN (");
+                                                query.push_str(&from_list(&old.groups));
                                                 query.push_str("))");
                                             }
 
@@ -1314,15 +1361,15 @@ fn handle_client(
 
                                         if correct {
                                             db.execute(
-                                                "UPDATE users SET attributes = ? WHERE id = ?",
-                                                &[&from_list(&attributes), &(user.id as i64)]
+                                                "UPDATE users SET groups = ? WHERE id = ?",
+                                                &[&from_list(&groups), &(user.id as i64)]
                                             ).unwrap();
                                             broadcast = true;
                                             reply = Some(Packet::UserReceive(common::UserReceive {
                                                 inner: common::User {
-                                                    attributes: attributes,
                                                     ban: old.ban,
                                                     bot: old.bot,
+                                                    groups: groups,
                                                     id: user.id,
                                                     name: old.name
                                                 }
@@ -1334,55 +1381,6 @@ fn handle_client(
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_USER));
-                            }
-                        },
-                        Packet::LoginUpdate(login) => {
-                            let mut reset_token = login.reset_token;
-                            let id = get_id!();
-                            rate_limit!(id, reset_token
-                                        || (login.password_current.is_some()
-                                        && login.password_new.is_some()));
-
-                            if let Some(name) = login.name {
-                                db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
-                            }
-                            if let Some(current) = login.password_current {
-                                if let Some(new) = login.password_new {
-                                    let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();
-                                    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-                                    let password: String = rows.next().unwrap().unwrap().get(0);
-                                    let valid = attempt_or!(bcrypt::verify(&current, &password), {
-                                        eprintln!("Failed to verify password");
-                                        close!();
-                                    });
-                                    if valid {
-                                        let hash = attempt_or!(bcrypt::hash(&new, bcrypt::DEFAULT_COST), {
-                                            eprintln!("Failed to hash password");
-                                            close!();
-                                        });
-                                        db.execute("UPDATE users SET password = ? WHERE id = ?", &[&hash, &(id as i64)])
-                                            .unwrap();
-                                        reset_token = true;
-                                    } else {
-                                        reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
-                                        reset_token = false;
-                                    }
-                                } else {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
-                                    reset_token = false;
-                                }
-                            }
-                            if reset_token {
-                                let token = attempt_or!(gen_token(), {
-                                    eprintln!("Failed to generate random token");
-                                    close!();
-                                });
-                                db.execute("UPDATE users SET token = ? WHERE id = ?", &[&token, &(id as i64)]).unwrap();
-                                reply = Some(Packet::LoginSuccess(common::LoginSuccess {
-                                    created: false,
-                                    id: id,
-                                    token: token
-                                }));
                             }
                         },
                         _ => unimplemented!()
@@ -1459,14 +1457,14 @@ fn handle_client(
                         let mut sessions = sessions.borrow_mut();
                         let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;
                         {
-                            let mut stmt = db.prepare_cached("SELECT * FROM attributes").unwrap();
+                            let mut stmt = db.prepare_cached("SELECT * FROM groups").unwrap();
                             let mut rows = stmt.query(&[]).unwrap();
 
                             while let Some(row) = rows.next() {
                                 let row = row.unwrap();
 
-                                write(writer, Packet::AttributeReceive(common::AttributeReceive {
-                                    inner: get_attribute_by_fields(&row),
+                                write(writer, Packet::GroupReceive(common::GroupReceive {
+                                    inner: get_group_by_fields(&row),
                                     new: false,
                                 }));
                             }

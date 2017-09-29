@@ -38,9 +38,9 @@ pub enum LogEntryId {
 
 pub struct Session {
     addr: SocketAddr,
-    attributes: HashMap<usize, common::Attribute>,
     channel: Option<usize>,
     channels: HashMap<usize, common::Channel>,
+    groups: HashMap<usize, common::Group>,
     id: usize,
     last: Option<(usize, Vec<u8>)>,
     stream: SslStream<TcpStream>,
@@ -51,9 +51,9 @@ impl Session {
     pub fn new(addr: SocketAddr, id: usize, stream: SslStream<TcpStream>) -> Session {
         Session {
             addr: addr,
-            attributes: HashMap::new(),
             channel: None,
             channels: HashMap::new(),
+            groups: HashMap::new(),
             id: id,
             last: None,
             stream: stream,
@@ -217,44 +217,29 @@ fn main() {
             }
 
             match &*command {
-                "quit" => break,
-                "nick" => {
-                    usage!(1, "nick <name>");
-                    nick = args.remove(0);
-
+                "ban" | "unban" => {
+                    usage!(1, "ban/unban <user id>");
                     let mut session = session.lock().unwrap();
-                    if let Some(ref mut session) = *session {
-                        let packet = Packet::LoginUpdate(common::LoginUpdate {
-                            name: Some(nick.clone()),
-                            password_current: None,
-                            password_new: None,
-                            reset_token: false
-                        });
-                        write!(session, packet, { continue; })
+                    let session = require_session!(session);
+                    let id = match args[0].parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!("Failed to parse ID");
+                            continue;
+                        }
+                    };
+
+                    if !session.users.contains_key(&id) {
+                        println!("No such user");
+                        continue;
                     }
 
-                    println!("Your name is now {}", nick);
-                },
-                "passwd" => {
-                    usage!(0, "passwd");
-                    {
-                        let mut session = session.lock().unwrap();
-                        let session = require_session!(session);
-
-                        println!("Current password: ");
-                        let current = readpass!({ continue; });
-                        println!("New password: ");
-                        let new = readpass!({ continue; });
-
-                        let packet = Packet::LoginUpdate(common::LoginUpdate {
-                            name: None,
-                            password_current: Some(current),
-                            password_new: Some(new),
-                            reset_token: true // Doesn't actually matter in this case
-                        });
-                        write!(session, packet, { continue; })
-                    }
-                    let _ = rx_sent.recv_timeout(Duration::from_secs(10));
+                    let packet = Packet::UserUpdate(common::UserUpdate {
+                        ban: Some(command == "ban"),
+                        groups: None,
+                        id: id
+                    });
+                    write!(session, packet, { continue; })
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
@@ -273,28 +258,8 @@ fn main() {
                     };
                     *session = connect::connect(addr, &db.lock().unwrap(), &nick, &screen, &ssl);
                 },
-                "disconnect" => {
-                    usage!(0, "disconnect");
-                    let mut session = session.lock().unwrap();
-                    {
-                        let session = require_session!(session);
-                        let _ = common::write(&mut session.stream, &Packet::Close);
-                    }
-                    *session = None;
-                },
-                "forget" => {
-                    usage!(1, "forget <ip>");
-                    let addr = match parse_ip(&args[0]) {
-                        Some(some) => some,
-                        None => {
-                            println!("Invalid IP");
-                            continue;
-                        }
-                    };
-                    db.lock().unwrap().execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
-                },
                 "create" => {
-                    usage_min!(2, "create <\"attribute\"/\"channel\"> <name> [data]");
+                    usage_min!(2, "create <\"group\"/\"channel\"> <name> [data]");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let packet = match &*args[0] {
@@ -309,15 +274,15 @@ fn main() {
                                 name: name
                             })
                         },
-                        "attribute" => {
-                            usage_max!(3, "create attribute <name> [data]");
+                        "group" => {
+                            usage_max!(3, "create group <name> [data]");
                             let (mut allow, mut deny) = (0, 0);
                             if args.len() == 3 && !from_perm_string(&*args[2], &mut allow, &mut deny) {
                                 println!("Invalid permission string");
                                 continue;
                             }
-                            let max = session.attributes.values().max_by_key(|item| item.pos);
-                            Packet::AttributeCreate(common::AttributeCreate {
+                            let max = session.groups.values().max_by_key(|item| item.pos);
+                            Packet::GroupCreate(common::GroupCreate {
                                 allow: allow,
                                 deny: deny,
                                 name: args.remove(1),
@@ -329,113 +294,8 @@ fn main() {
                     };
                     write!(session, packet, { continue; })
                 },
-                "update" => {
-                    usage!(2, "update <\"attribute\"/\"channel\"> <id>");
-
-                    let mut session = session.lock().unwrap();
-                    let session = require_session!(session);
-                    let id = match args[1].parse() {
-                        Ok(ok) => ok,
-                        Err(_) => {
-                            println!("Not a valid number");
-                            continue;
-                        }
-                    };
-
-                    let packet = match &*args[0] {
-                        "attribute" => if let Some(attribute) = session.attributes.get(&id) {
-                            let (mut allow, mut deny) = (attribute.allow, attribute.deny);
-
-                            println!("Editing: {}", attribute.name);
-                            println!("(Press enter to keep current value)");
-                            println!();
-                            println!("Name [{}]: ", attribute.name);
-
-                            let name = readline!({ continue; });
-                            let mut name = name.trim();
-                            if name.is_empty() { name = &attribute.name };
-
-                            println!("Permission [{}]: ", to_perm_string(allow, deny));
-                            let perms = readline!({ continue; });
-                            if !from_perm_string(&perms, &mut allow, &mut deny) {
-                                println!("Invalid permission string");
-                                continue;
-                            }
-
-                            println!("Position [{}]: ", attribute.pos);
-                            let pos = readline!({ continue; });
-                            let pos = pos.trim();
-                            let pos = if pos.is_empty() {
-                                attribute.pos
-                            } else {
-                                match pos.parse() {
-                                    Ok(ok) => ok,
-                                    Err(_) => {
-                                        println!("Not a valid number");
-                                        continue;
-                                    }
-                                }
-                            };
-
-                            Some(Packet::AttributeUpdate(common::AttributeUpdate {
-                                inner: common::Attribute {
-                                    allow: allow,
-                                    deny: deny,
-                                    id: attribute.id,
-                                    name: name.to_string(),
-                                    pos: pos,
-                                    unassignable: attribute.unassignable
-                                }
-                            }))
-                        } else { None },
-                        "channel" => if let Some(channel) = session.channels.get(&id) {
-                            println!("Editing: #{}", channel.name);
-                            println!("(Press enter to keep current value)");
-                            println!();
-
-                            println!("Name [{}]: ", channel.name);
-                            let name = readline!({ continue; });
-                            let mut name = name.trim();
-                            if name.is_empty() { name = &channel.name }
-
-                            let overrides = match screen.get_channel_overrides(channel.overrides.clone(), &session) {
-                                Ok(ok) => ok,
-                                Err(_) => continue
-                            };
-
-                            Some(Packet::ChannelUpdate(common::ChannelUpdate {
-                                inner: common::Channel {
-                                    id: channel.id,
-                                    name: name.to_string(),
-                                    overrides: overrides
-                                },
-                                keep_overrides: false
-                            }))
-                        } else { None },
-                        "user" => if let Some(user) = session.users.get(&id) {
-                            let attributes = match screen.get_user_attributes(user.attributes.clone(), &session) {
-                                Ok(ok) => ok,
-                                Err(_) => continue
-                            };
-                            Some(Packet::UserUpdate(common::UserUpdate {
-                                attributes: Some(attributes),
-                                ban: None,
-                                id: id
-                            }))
-                        } else { None },
-                        _ => {
-                            println!("Unable to delete that");
-                            continue;
-                        }
-                    };
-                    if let Some(packet) = packet {
-                        write!(session, packet, { continue; })
-                    } else {
-                        println!("Nothing with that ID exists");
-                    }
-                },
                 "delete" => {
-                    usage!(2, "delete <\"attribute\"/\"channel\"/\"message\"> <id>");
+                    usage!(2, "delete <\"group\"/\"channel\"/\"message\"> <id>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
@@ -448,8 +308,8 @@ fn main() {
                     };
 
                     let packet = match &*args[0] {
-                        "attribute" => if session.attributes.contains_key(&id) {
-                            Some(Packet::AttributeDelete(common::AttributeDelete {
+                        "group" => if session.groups.contains_key(&id) {
+                            Some(Packet::GroupDelete(common::GroupDelete {
                                 id: id
                             }))
                         } else { None },
@@ -473,60 +333,28 @@ fn main() {
                         println!("Nothing with that ID exists");
                     }
                 },
-                "list" => {
-                    usage!(1, "list <\"attributes\"/\"channels\"/\"users\">");
+                "disconnect" => {
+                    usage!(0, "disconnect");
                     let mut session = session.lock().unwrap();
-                    let session = require_session!(session);
-                    match &*args[0] {
-                        "channels" => {
-                            // Yeah, cloning this is bad... But what can I do? I need to sort!
-                            // Though, I suspect this might be a shallow copy.
-                            let mut channels: Vec<_> = session.channels.values().collect();
-                            channels.sort_by_key(|item| &item.name);
-
-                            let result = channels.iter().fold(String::new(), |mut acc, channel| {
-                                if !acc.is_empty() { acc.push_str(", "); }
-                                acc.push('#');
-                                acc.push_str(&channel.name);
-                                acc
-                            });
-                            println!("{}", result);
-                        },
-                        "attributes" => {
-                            // Read the above comment, thank you ---------------------------^
-                            let mut attributes: Vec<_> = session.attributes.values().collect();
-                            attributes.sort_by_key(|item| &item.pos);
-
-                            let result = attributes.iter().fold(String::new(), |mut acc, attribute| {
-                                if !acc.is_empty() { acc.push_str(", "); }
-                                acc.push_str(&attribute.name);
-                                acc
-                            });
-                            println!("{}", result);
-                        },
-                        "users" => {
-                            // something something above comment
-                            let mut users: Vec<_> = session.users.values().collect();
-                            users.sort_by_key(|item| &item.name);
-
-                            for banned in &[false, true] {
-                                if *banned {
-                                    println!("Banned:");
-                                }
-                                println!("{}", users.iter().fold(String::new(), |mut acc, user| {
-                                    if user.ban == *banned {
-                                        if !acc.is_empty() { acc.push_str(", "); }
-                                        acc.push_str(&user.name);
-                                    }
-                                    acc
-                                }));
-                            }
-                        },
-                        _ => println!("Unable to list that")
+                    {
+                        let session = require_session!(session);
+                        let _ = common::write(&mut session.stream, &Packet::Close);
                     }
+                    *session = None;
+                },
+                "forget" => {
+                    usage!(1, "forget <ip>");
+                    let addr = match parse_ip(&args[0]) {
+                        Some(some) => some,
+                        None => {
+                            println!("Invalid IP");
+                            continue;
+                        }
+                    };
+                    db.lock().unwrap().execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
                 "info" => {
-                    usage!(1, "info <attribute or channel name>");
+                    usage!(1, "info <group or channel name>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let mut name = &*args[0];
@@ -548,20 +376,20 @@ fn main() {
                             }
                         }
                     }
-                    for attribute in session.attributes.values() {
-                        if name == attribute.name || Ok(attribute.id) == id {
-                            println!("Attribute {}", attribute.name);
-                            println!("Permission: {}", to_perm_string(attribute.allow, attribute.deny));
-                            println!("ID: #{}", attribute.id);
-                            println!("Position: {}", attribute.pos);
+                    for group in session.groups.values() {
+                        if name == group.name || Ok(group.id) == id {
+                            println!("Group {}", group.name);
+                            println!("Permission: {}", to_perm_string(group.allow, group.deny));
+                            println!("ID: #{}", group.id);
+                            println!("Position: {}", group.pos);
                         }
                     }
                     for user in session.users.values() {
                         if name == user.name || Ok(user.id) == id {
                             println!("User {}", user.name);
                             println!(
-                                "Attributes: [{}]",
-                                user.attributes.iter()
+                                "Groups: [{}]",
+                                user.groups.iter()
                                     .fold(String::new(), |mut acc, id| {
                                         if !acc.is_empty() {
                                             acc.push_str(", ");
@@ -608,29 +436,201 @@ fn main() {
                         println!("No channel found with that name");
                     }
                 },
-                "ban" | "unban" => {
-                    usage!(1, "ban/unban <user id>");
+                "list" => {
+                    usage!(1, "list <\"groups\"/\"channels\"/\"users\">");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
-                    let id = match args[0].parse() {
+                    match &*args[0] {
+                        "channels" => {
+                            // Yeah, cloning this is bad... But what can I do? I need to sort!
+                            // Though, I suspect this might be a shallow copy.
+                            let mut channels: Vec<_> = session.channels.values().collect();
+                            channels.sort_by_key(|item| &item.name);
+
+                            let result = channels.iter().fold(String::new(), |mut acc, channel| {
+                                if !acc.is_empty() { acc.push_str(", "); }
+                                acc.push('#');
+                                acc.push_str(&channel.name);
+                                acc
+                            });
+                            println!("{}", result);
+                        },
+                        "groups" => {
+                            // Read the above comment, thank you ---------------------------^
+                            let mut groups: Vec<_> = session.groups.values().collect();
+                            groups.sort_by_key(|item| &item.pos);
+
+                            let result = groups.iter().fold(String::new(), |mut acc, group| {
+                                if !acc.is_empty() { acc.push_str(", "); }
+                                acc.push_str(&group.name);
+                                acc
+                            });
+                            println!("{}", result);
+                        },
+                        "users" => {
+                            // something something above comment
+                            let mut users: Vec<_> = session.users.values().collect();
+                            users.sort_by_key(|item| &item.name);
+
+                            for banned in &[false, true] {
+                                if *banned {
+                                    println!("Banned:");
+                                }
+                                println!("{}", users.iter().fold(String::new(), |mut acc, user| {
+                                    if user.ban == *banned {
+                                        if !acc.is_empty() { acc.push_str(", "); }
+                                        acc.push_str(&user.name);
+                                    }
+                                    acc
+                                }));
+                            }
+                        },
+                        _ => println!("Unable to list that")
+                    }
+                },
+                "nick" => {
+                    usage!(1, "nick <name>");
+                    nick = args.remove(0);
+
+                    let mut session = session.lock().unwrap();
+                    if let Some(ref mut session) = *session {
+                        let packet = Packet::LoginUpdate(common::LoginUpdate {
+                            name: Some(nick.clone()),
+                            password_current: None,
+                            password_new: None,
+                            reset_token: false
+                        });
+                        write!(session, packet, { continue; })
+                    }
+
+                    println!("Your name is now {}", nick);
+                },
+                "passwd" => {
+                    usage!(0, "passwd");
+                    {
+                        let mut session = session.lock().unwrap();
+                        let session = require_session!(session);
+
+                        println!("Current password: ");
+                        let current = readpass!({ continue; });
+                        println!("New password: ");
+                        let new = readpass!({ continue; });
+
+                        let packet = Packet::LoginUpdate(common::LoginUpdate {
+                            name: None,
+                            password_current: Some(current),
+                            password_new: Some(new),
+                            reset_token: true // Doesn't actually matter in this case
+                        });
+                        write!(session, packet, { continue; })
+                    }
+                    let _ = rx_sent.recv_timeout(Duration::from_secs(10));
+                },
+                "quit" => break,
+                "update" => {
+                    usage!(2, "update <\"group\"/\"channel\"> <id>");
+
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+                    let id = match args[1].parse() {
                         Ok(ok) => ok,
                         Err(_) => {
-                            println!("Failed to parse ID");
+                            println!("Not a valid number");
                             continue;
                         }
                     };
 
-                    if !session.users.contains_key(&id) {
-                        println!("No such user");
-                        continue;
-                    }
+                    let packet = match &*args[0] {
+                        "group" => if let Some(group) = session.groups.get(&id) {
+                            let (mut allow, mut deny) = (group.allow, group.deny);
 
-                    let packet = Packet::UserUpdate(common::UserUpdate {
-                        attributes: None,
-                        ban: Some(command == "ban"),
-                        id: id
-                    });
-                    write!(session, packet, { continue; })
+                            println!("Editing: {}", group.name);
+                            println!("(Press enter to keep current value)");
+                            println!();
+                            println!("Name [{}]: ", group.name);
+
+                            let name = readline!({ continue; });
+                            let mut name = name.trim();
+                            if name.is_empty() { name = &group.name };
+
+                            println!("Permission [{}]: ", to_perm_string(allow, deny));
+                            let perms = readline!({ continue; });
+                            if !from_perm_string(&perms, &mut allow, &mut deny) {
+                                println!("Invalid permission string");
+                                continue;
+                            }
+
+                            println!("Position [{}]: ", group.pos);
+                            let pos = readline!({ continue; });
+                            let pos = pos.trim();
+                            let pos = if pos.is_empty() {
+                                group.pos
+                            } else {
+                                match pos.parse() {
+                                    Ok(ok) => ok,
+                                    Err(_) => {
+                                        println!("Not a valid number");
+                                        continue;
+                                    }
+                                }
+                            };
+
+                            Some(Packet::GroupUpdate(common::GroupUpdate {
+                                inner: common::Group {
+                                    allow: allow,
+                                    deny: deny,
+                                    id: group.id,
+                                    name: name.to_string(),
+                                    pos: pos,
+                                    unassignable: group.unassignable
+                                }
+                            }))
+                        } else { None },
+                        "channel" => if let Some(channel) = session.channels.get(&id) {
+                            println!("Editing: #{}", channel.name);
+                            println!("(Press enter to keep current value)");
+                            println!();
+
+                            println!("Name [{}]: ", channel.name);
+                            let name = readline!({ continue; });
+                            let mut name = name.trim();
+                            if name.is_empty() { name = &channel.name }
+
+                            let overrides = match screen.get_channel_overrides(channel.overrides.clone(), &session) {
+                                Ok(ok) => ok,
+                                Err(_) => continue
+                            };
+
+                            Some(Packet::ChannelUpdate(common::ChannelUpdate {
+                                inner: common::Channel {
+                                    id: channel.id,
+                                    name: name.to_string(),
+                                    overrides: overrides
+                                },
+                                keep_overrides: false
+                            }))
+                        } else { None },
+                        "user" => if let Some(user) = session.users.get(&id) {
+                            let groups = match screen.get_user_groups(user.groups.clone(), &session) {
+                                Ok(ok) => ok,
+                                Err(_) => continue
+                            };
+                            Some(Packet::UserUpdate(common::UserUpdate {
+                                ban: None,
+                                groups: Some(groups),
+                                id: id
+                            }))
+                        } else { None },
+                        _ => {
+                            println!("Unable to delete that");
+                            continue;
+                        }
+                    };
+                    if let Some(packet) = packet {
+                        write!(session, packet, { continue; })
+                    } else {
+                        println!("Nothing with that ID exists");
+                    }
                 },
                 _ => {
                     println!("Unknown command");
@@ -709,10 +709,10 @@ fn to_single_perm_string(bitmask: u8) -> String {
     if bitmask & common::PERM_WRITE == common::PERM_WRITE {
         result.push('w');
     }
-    if bitmask & common::PERM_ASSIGN_ATTRIBUTES == common::PERM_ASSIGN_ATTRIBUTES {
+    if bitmask & common::PERM_ASSIGN_GROUPS == common::PERM_ASSIGN_GROUPS {
         result.push('s');
     }
-    if bitmask & common::PERM_MANAGE_ATTRIBUTES == common::PERM_MANAGE_ATTRIBUTES {
+    if bitmask & common::PERM_MANAGE_GROUPS == common::PERM_MANAGE_GROUPS {
         result.push('a');
     }
     if bitmask & common::PERM_MANAGE_CHANNELS == common::PERM_MANAGE_CHANNELS {
@@ -735,9 +735,10 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
         let perm = match c {
             'r' => common::PERM_READ,
             'w' => common::PERM_WRITE,
-            's' => common::PERM_ASSIGN_ATTRIBUTES,
-            'a' => common::PERM_MANAGE_ATTRIBUTES,
+
+            's' => common::PERM_ASSIGN_GROUPS,
             'c' => common::PERM_MANAGE_CHANNELS,
+            'a' => common::PERM_MANAGE_GROUPS,
             'm' => common::PERM_MANAGE_MESSAGES,
             ' ' => continue,
             _   => return false

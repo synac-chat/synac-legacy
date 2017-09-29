@@ -160,7 +160,7 @@ impl Screen {
     }
     pub fn update(&self, _: &Session) {}
 
-    pub fn get_user_attributes(&self, mut attributes: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
+    pub fn get_user_groups(&self, mut groups: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
         let _guard = self.mute();
         let mut log = Vec::with_capacity(2);
 
@@ -169,12 +169,12 @@ impl Screen {
         }
 
         loop {
-            let result = attributes.iter().fold(String::new(), |mut acc, item| {
+            let result = groups.iter().fold(String::new(), |mut acc, item| {
                 if !acc.is_empty() { acc.push_str(", "); }
                 acc.push_str(&item.to_string());
                 acc
             });
-            println!("Attributes: [{}]", result);
+            println!("Groups: [{}]", result);
             println!("Commands: add, remove, quit");
             self.repaint_(&log);
 
@@ -203,27 +203,27 @@ impl Screen {
                     continue;
                 }
             };
-            if let Some(attribute) = session.attributes.get(&id) {
-                if attribute.pos == 0 {
-                    println!("Unable to assign that attribute");
+            if let Some(group) = session.groups.get(&id) {
+                if group.pos == 0 {
+                    println!("Unable to assign that group");
                     continue;
                 }
                 if add {
-                    attributes.push(id);
-                    println!("Added: {}", attribute.name);
+                    groups.push(id);
+                    println!("Added: {}", group.name);
                 } else {
-                    let pos = attributes.iter().position(|item| *item == id);
+                    let pos = groups.iter().position(|item| *item == id);
                     if let Some(pos) = pos {
-                        attributes.remove(pos);
+                        groups.remove(pos);
                     }
                     // TODO remove_item once stable
-                    println!("Removed: {}", attribute.name);
+                    println!("Removed: {}", group.name);
                 }
             } else {
-                println!("Could not find attribute");
+                println!("Could not find group");
             }
         }
-        Ok(attributes)
+        Ok(groups)
     }
     pub fn get_channel_overrides(&self, mut overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
@@ -274,7 +274,7 @@ impl Screen {
                     continue;
                 }
             };
-            if let Some(attribute) = session.attributes.get(&id) {
+            if let Some(group) = session.groups.get(&id) {
                 if set {
                     let (mut allow, mut deny) = (0, 0);
                     if let Some(perms) = overrides.get(&id) {
@@ -286,13 +286,13 @@ impl Screen {
                         continue;
                     }
                     overrides.insert(id, (allow, deny));
-                    println!("Set \"{}\" to {}", attribute.name, to_perm_string(allow, deny));
+                    println!("Set \"{}\" to {}", group.name, to_perm_string(allow, deny));
                 } else {
                     overrides.remove(&id);
-                    println!("Unset: {}", attribute.name);
+                    println!("Unset: {}", group.name);
                 }
             } else {
-                println!("Could not find attribute");
+                println!("Could not find group");
             }
         }
         Ok(overrides)

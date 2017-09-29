@@ -124,16 +124,16 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             Ok(Packet::Err(code)) => match code {
                 common::ERR_LOGIN_INVALID |
                 common::ERR_MISSING_FIELD => {},
+                common::ERR_LIMIT_REACHED => {
+                    println!("Username too long");
+                    return None;
+                },
                 common::ERR_LOGIN_BANNED => {
                     println!("You have been banned from this server. :(");
                     return None;
                 },
                 common::ERR_LOGIN_BOT => {
                     println!("This account is a bot account");
-                    return None;
-                },
-                common::ERR_LIMIT_REACHED => {
-                    println!("Username too long");
                     return None;
                 },
                 common::ERR_MAX_CONN_PER_IP => {
@@ -189,8 +189,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                 println!("Logged in as user #{}", login.id);
             },
             Ok(Packet::Err(code)) => match code {
-                common::ERR_LOGIN_INVALID => {
-                    println!("Invalid credentials");
+                common::ERR_LIMIT_REACHED => {
+                    println!("Username too long");
                     return None;
                 },
                 common::ERR_LOGIN_BANNED => {
@@ -201,8 +201,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
                     println!("This account is a bot account");
                     return None;
                 },
-                common::ERR_LIMIT_REACHED => {
-                    println!("Username too long");
+                common::ERR_LOGIN_INVALID => {
+                    println!("Invalid credentials");
                     return None;
                 },
                 _ => {

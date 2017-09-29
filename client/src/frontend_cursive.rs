@@ -196,13 +196,13 @@ impl Screen {
         })).unwrap();
     }
 
-    pub fn get_user_attributes(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
+    pub fn get_user_groups(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
         Err(())
     }
     pub fn get_channel_overrides(&self, overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
-        let names: HashMap<usize, String> = session.attributes.iter()
-            .map(|(id, attribute)| (*id, attribute.name.clone()))
+        let names: HashMap<usize, String> = session.groups.iter()
+            .map(|(id, group)| (*id, group.name.clone()))
             .collect();
 
         self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
