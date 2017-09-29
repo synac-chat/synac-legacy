@@ -103,15 +103,28 @@ fn main() {
                     token   TEXT
                 )", &[])
         .expect("Couldn't create SQLite table");
+    db.execute("CREATE TABLE IF NOT EXISTS data (
+                    key     TEXT NOT NULL UNIQUE,
+                    value   TEXT NOT NULL
+                )", &[])
+        .expect("Couldn't create SQLite table");
+
+    let mut nick = {
+        let mut stmt = db.prepare("SELECT value FROM data WHERE key = 'nick'").unwrap();
+        let mut rows = stmt.query(&[]).unwrap();
+        if let Some(row) = rows.next() {
+            row.unwrap().get(0)
+        } else {
+            #[cfg(unix)]
+            { env::var("USER").unwrap_or_else(|_| "unknown".to_string()) }
+            #[cfg(windows)]
+            { env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string()) }
+            #[cfg(not(any(unix, windows)))]
+            { String::from("unknown") }
+        }
+    };
 
     let db = Arc::new(Mutex::new(db));
-
-    #[cfg(unix)]
-    let mut nick = env::var("USER").unwrap_or_else(|_| "unknown".to_string());
-    #[cfg(windows)]
-    let mut nick = env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string());
-    #[cfg(not(any(unix, windows)))]
-    let mut nick = "unknown".to_string();
 
     let ssl = SslConnectorBuilder::new(SslMethod::tls())
         .expect("Failed to create SSL connector D:")
@@ -491,6 +504,11 @@ fn main() {
                 "nick" => {
                     usage!(1, "nick <name>");
                     nick = args.remove(0);
+
+                    db.lock().unwrap().execute(
+                        "REPLACE INTO data (key, value) VALUES ('nick', ?)",
+                        &[&nick]
+                    ).unwrap();
 
                     let mut session = session.lock().unwrap();
                     if let Some(ref mut session) = *session {
