@@ -144,7 +144,9 @@ pub fn listen(
                                             println!("Slow down! You may try again in {} seconds.", time);
                                         }
                                         Packet::TypingReceive(event) => {
-                                            session.typing.insert((event.author, event.channel), Instant::now());
+                                            if event.author != session.id {
+                                                session.typing.insert((event.author, event.channel), Instant::now());
+                                            }
                                         },
                                         Packet::UserReceive(event) => {
                                             session.users.insert(event.inner.id, event.inner);
