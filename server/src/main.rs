@@ -512,7 +512,7 @@ fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &Hash
     db.execute("DELETE FROM overrides WHERE channel = ?", &[&(channel as i64)]).unwrap();
 
     let mut stmt_exists = db.prepare_cached("SELECT COUNT(*) FROM groups WHERE id = ?") .unwrap();
-    let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, channel, deny, group) VALUES (?, ?, ?, ?)")
+    let mut stmt_insert = db.prepare_cached("INSERT INTO overrides (allow, channel, deny, [group]) VALUES (?, ?, ?, ?)")
         .unwrap();
 
     for (id, &(allow, deny)) in overrides {
