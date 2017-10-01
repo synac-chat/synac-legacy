@@ -123,21 +123,24 @@ pub fn listen(
                                             screen.repaint();
                                         },
                                         Packet::MessageReceive(msg) => {
-                                            session.typing.remove(&(msg.author.id, msg.channel.id));
+                                            let msg = msg.inner;
+                                            session.typing.remove(&(msg.author, msg.channel));
 
-                                            if session.channel == Some(msg.channel.id) {
-                                                screen.log_with_id(
-                                                    format!(
-                                                        "{} (ID #{}): {}",
-                                                        msg.author.name,
-                                                        msg.id,
-                                                        String::from_utf8_lossy(&msg.text).replace("\x1b", "\\e")
-                                                    ),
-                                                    LogEntryId::Message(msg.id)
-                                                );
-                                            }
-                                            if msg.author.id == session.id {
-                                                session.last = Some((msg.id, msg.text));
+                                            if let Some(user) = session.users.get(&msg.author) {
+                                                if session.channel == Some(msg.channel) {
+                                                    screen.log_with_id(
+                                                        format!(
+                                                            "{} (ID #{}): {}",
+                                                            user.name,
+                                                            msg.id,
+                                                            String::from_utf8_lossy(&msg.text).replace("\x1b", "\\e")
+                                                        ),
+                                                        LogEntryId::Message(msg.id)
+                                                    );
+                                                }
+                                                if msg.author == session.id {
+                                                    session.last = Some((msg.id, msg.text));
+                                                }
                                             }
                                         },
                                         Packet::RateLimited(time) => {

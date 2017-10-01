@@ -17,17 +17,18 @@ pub const LIMIT_MESSAGE_LIST: usize = 64;
 
 pub const ERR_ATTR_INVALID_POS:   u8 = 1;
 pub const ERR_ATTR_LOCKED_NAME:   u8 = 2;
-pub const ERR_LIMIT_REACHED:      u8 = 3;
-pub const ERR_LOGIN_BANNED:       u8 = 4;
-pub const ERR_LOGIN_BOT:          u8 = 5;
-pub const ERR_LOGIN_INVALID:      u8 = 6;
-pub const ERR_MAX_CONN_PER_IP:    u8 = 7;
-pub const ERR_MISSING_FIELD:      u8 = 8;
-pub const ERR_MISSING_PERMISSION: u8 = 9;
-pub const ERR_UNKNOWN_CHANNEL:    u8 = 10;
-pub const ERR_UNKNOWN_GROUP:      u8 = 11;
-pub const ERR_UNKNOWN_MESSAGE:    u8 = 12;
-pub const ERR_UNKNOWN_USER:       u8 = 13;
+pub const ERR_INVALID_CHANNEL:    u8 = 3;
+pub const ERR_LIMIT_REACHED:      u8 = 4;
+pub const ERR_LOGIN_BANNED:       u8 = 5;
+pub const ERR_LOGIN_BOT:          u8 = 6;
+pub const ERR_LOGIN_INVALID:      u8 = 7;
+pub const ERR_MAX_CONN_PER_IP:    u8 = 8;
+pub const ERR_MISSING_FIELD:      u8 = 9;
+pub const ERR_MISSING_PERMISSION: u8 = 10;
+pub const ERR_UNKNOWN_CHANNEL:    u8 = 11;
+pub const ERR_UNKNOWN_GROUP:      u8 = 12;
+pub const ERR_UNKNOWN_MESSAGE:    u8 = 13;
+pub const ERR_UNKNOWN_USER:       u8 = 14;
 
 pub const PERM_READ:              u8 = 1;
 pub const PERM_WRITE:             u8 = 1 << 1;
@@ -132,6 +133,7 @@ pub struct MessageCreate {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageDelete {
+    pub channel: usize,
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -143,6 +145,7 @@ pub struct MessageList {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageUpdate {
+    pub channel: usize,
     pub id: usize,
     pub text: Vec<u8>
 }
@@ -194,13 +197,8 @@ pub struct MessageDeleteReceive {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageReceive {
-    pub author: User,
-    pub channel: Channel,
-    pub id: usize,
-    pub new: bool,
-    pub text: Vec<u8>,
-    pub timestamp: i64,
-    pub timestamp_edit: Option<i64>
+    pub inner: Message,
+    pub new: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct TypingReceive {

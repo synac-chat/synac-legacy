@@ -1089,16 +1089,18 @@ fn handle_client(
                                     ).unwrap();
 
                                     broadcast = true;
-                                    broadcast_in = Some(channel.overrides.clone());
+                                    broadcast_in = Some(channel.overrides);
                                     // I don't see any clean way to do this without clone. Sorry :(
                                     reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        author: user,
-                                        channel: channel,
-                                        id: db.last_insert_rowid() as usize,
-                                        new: true,
-                                        text: msg.text,
-                                        timestamp: timestamp,
-                                        timestamp_edit: None
+                                        inner: common::Message {
+                                            author: id,
+                                            channel: msg.channel,
+                                            id: db.last_insert_rowid() as usize,
+                                            text: msg.text,
+                                            timestamp: timestamp,
+                                            timestamp_edit: None
+                                        },
+                                        new: true
                                     }));
                                 }
                             } else {
@@ -1111,9 +1113,11 @@ fn handle_client(
 
                             if let Some(msg) = get_message(&db, event.id) {
                                 let user = get_user(&db, id).unwrap();
-                                let channel = get_channel(&db, id).unwrap();
+                                let channel = get_channel(&db, event.channel).unwrap();
 
-                                if msg.author != id && !has_perm(
+                                if msg.channel != msg.channel {
+                                    reply = Some(Packet::Err(common::ERR_INVALID_CHANNEL));
+                                } else if msg.author != id && !has_perm(
                                     &config,
                                     id,
                                     calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
@@ -1122,8 +1126,8 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
-                                        "DELETE FROM messages WHERE id = ?",
-                                        &[&(event.id as i64)]
+                                        "DELETE FROM messages WHERE channel = ? AND id = ?",
+                                        &[&(event.channel as i64), &(event.id as i64)]
                                     ).unwrap();
 
                                     broadcast = true;
@@ -1146,11 +1150,12 @@ fn handle_client(
                             } else if let Some(msg) = get_message(&db, event.id) {
                                 let timestamp = Utc::now().timestamp();
 
-                                if msg.author != id {
+                                if msg.channel != msg.channel {
+                                    reply = Some(Packet::Err(common::ERR_INVALID_CHANNEL));
+                                } else if msg.author != id {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    let channel = get_channel(&db, id).unwrap();
-                                    let user = get_user(&db, id).unwrap();
+                                    let channel = get_channel(&db, event.channel).unwrap();
 
                                     db.execute(
                                         "UPDATE messages SET text = ? WHERE id = ?",
@@ -1158,16 +1163,17 @@ fn handle_client(
                                     ).unwrap();
 
                                     broadcast = true;
-                                    broadcast_in = Some(channel.overrides.clone());
-                                    // I don't see any clean way to do this without clone. Sorry :(
+                                    broadcast_in = Some(channel.overrides);
                                     reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        author: user,
-                                        channel: channel,
-                                        id: event.id,
-                                        new: true,
-                                        text: event.text,
-                                        timestamp: msg.timestamp,
-                                        timestamp_edit: Some(timestamp)
+                                        inner: common::Message {
+                                            author: id,
+                                            channel: event.channel,
+                                            id: event.id,
+                                            text: event.text,
+                                            timestamp: msg.timestamp,
+                                            timestamp_edit: Some(timestamp)
+                                        },
+                                        new: true
                                     }));
                                 }
                             } else {
@@ -1236,21 +1242,9 @@ fn handle_client(
 
                                     while let Some(row) = rows.next() {
                                         let msg = get_message_by_fields(&row.unwrap());
-                                        let author = get_user(&db, msg.author).unwrap_or(common::User {
-                                            id: msg.author,
-                                            ..Default::default()
-                                        });
                                         write(writer, Packet::MessageReceive(common::MessageReceive {
-                                            author: author,
-                                            channel: common::Channel {
-                                                id: msg.channel,
-                                                ..Default::default()
-                                            },
-                                            id: msg.id,
-                                            new: false,
-                                            text: msg.text,
-                                            timestamp: msg.timestamp,
-                                            timestamp_edit: msg.timestamp_edit
+                                            inner: msg,
+                                            new: false
                                         }));
                                     }
                                 }
