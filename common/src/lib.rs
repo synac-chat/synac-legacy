@@ -25,10 +25,11 @@ pub const ERR_LOGIN_INVALID:      u8 = 7;
 pub const ERR_MAX_CONN_PER_IP:    u8 = 8;
 pub const ERR_MISSING_FIELD:      u8 = 9;
 pub const ERR_MISSING_PERMISSION: u8 = 10;
-pub const ERR_UNKNOWN_CHANNEL:    u8 = 11;
-pub const ERR_UNKNOWN_GROUP:      u8 = 12;
-pub const ERR_UNKNOWN_MESSAGE:    u8 = 13;
-pub const ERR_UNKNOWN_USER:       u8 = 14;
+pub const ERR_NAME_TAKEN:         u8 = 11;
+pub const ERR_UNKNOWN_CHANNEL:    u8 = 12;
+pub const ERR_UNKNOWN_GROUP:      u8 = 13;
+pub const ERR_UNKNOWN_MESSAGE:    u8 = 14;
+pub const ERR_UNKNOWN_USER:       u8 = 15;
 
 pub const PERM_READ:              u8 = 1;
 pub const PERM_WRITE:             u8 = 1 << 1;

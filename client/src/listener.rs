@@ -169,6 +169,9 @@ pub fn listen(
                                         Packet::Err(common::ERR_MISSING_PERMISSION) => {
                                             println!("Missing permission");
                                         },
+                                        Packet::Err(common::ERR_NAME_TAKEN) => {
+                                            println!("Name is already taken")
+                                        },
                                         Packet::Err(common::ERR_UNKNOWN_CHANNEL) => {
                                             println!("This channel was deleted");
                                         },

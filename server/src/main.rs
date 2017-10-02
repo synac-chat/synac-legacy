@@ -46,19 +46,19 @@ macro_rules! attempt_or {
 struct Config {
     owner_id: usize,
 
+    limit_connections_per_ip: u32,
     limit_requests_cheap_per_10_seconds: u8,
     limit_requests_expensive_per_5_minutes: u8,
-    limit_connections_per_ip: u32,
 
-    limit_user_name_min: usize,
-    limit_user_name_max: usize,
-    limit_channel_name_min: usize,
     limit_channel_name_max: usize,
-    limit_group_name_min: usize,
-    limit_group_name_max: usize,
+    limit_channel_name_min: usize,
     limit_group_amount_max: usize,
+    limit_group_name_max: usize,
+    limit_group_name_min: usize,
+    limit_message_max: usize,
     limit_message_min: usize,
-    limit_message_max: usize
+    limit_user_name_max: usize,
+    limit_user_name_min: usize
 }
 
 fn main() {
@@ -203,19 +203,19 @@ fn main() {
             config = Config {
                 owner_id: 1,
 
+                limit_connections_per_ip: 128,
                 limit_requests_cheap_per_10_seconds: 7,
                 limit_requests_expensive_per_5_minutes: 2,
-                limit_connections_per_ip: 128,
 
-                limit_user_name_min: 1,
-                limit_user_name_max: 32,
-                limit_channel_name_min: 1,
                 limit_channel_name_max: 32,
-                limit_group_name_min: 1,
-                limit_group_name_max: 32,
+                limit_channel_name_min: 1,
                 limit_group_amount_max: 128,
+                limit_group_name_max: 32,
+                limit_group_name_min: 1,
+                limit_message_max: 1024,
                 limit_message_min: 1,
-                limit_message_max: 1024
+                limit_user_name_max: 32,
+                limit_user_name_min: 1
             };
 
             match File::create(path) {
@@ -269,7 +269,7 @@ fn main() {
                     |row| row.get(0)
                 ).unwrap();
 
-                if count as usize > 0 {
+                if count != 0 {
                     write(&mut writer, Packet::Err(common::ERR_LOGIN_BANNED));
                     return Ok(());
                 }
@@ -520,7 +520,7 @@ fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &Hash
             &[&(*id as i64)],
             |row| row.get(0)
         ).unwrap();
-        if count as usize > 0 {
+        if count != 0 {
             stmt_insert.execute(&[&allow, &(*id as i64), &(channel as i64), &deny]).unwrap();
         }
     }
@@ -1023,32 +1023,44 @@ fn handle_client(
                                         && login.password_new.is_some()));
 
                             if let Some(name) = login.name {
-                                db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
+                                let count: i64 = db.query_row(
+                                    "SELECT COUNT(*) FROM users WHERE name = ?",
+                                    &[&name],
+                                    |row| row.get(0)
+                                ).unwrap();
+                                if count != 0 {
+                                    reply = Some(Packet::Err(common::ERR_NAME_TAKEN));
+                                    reset_token = false;
+                                } else {
+                                    db.execute("UPDATE users SET name = ? WHERE id = ?", &[&name, &(id as i64)]).unwrap();
+                                }
                             }
-                            if let Some(current) = login.password_current {
-                                if let Some(new) = login.password_new {
-                                    let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();
-                                    let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-                                    let password: String = rows.next().unwrap().unwrap().get(0);
-                                    let valid = attempt_or!(bcrypt::verify(&current, &password), {
-                                        eprintln!("Failed to verify password");
-                                        close!();
-                                    });
-                                    if valid {
-                                        let hash = attempt_or!(bcrypt::hash(&new, bcrypt::DEFAULT_COST), {
-                                            eprintln!("Failed to hash password");
+                            if reply.is_none() {
+                                if let Some(current) = login.password_current {
+                                    if let Some(new) = login.password_new {
+                                        let mut stmt = db.prepare_cached("SELECT password FROM users WHERE id = ?").unwrap();
+                                        let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+                                        let password: String = rows.next().unwrap().unwrap().get(0);
+                                        let valid = attempt_or!(bcrypt::verify(&current, &password), {
+                                            eprintln!("Failed to verify password");
                                             close!();
                                         });
-                                        db.execute("UPDATE users SET password = ? WHERE id = ?", &[&hash, &(id as i64)])
-                                            .unwrap();
-                                        reset_token = true;
+                                        if valid {
+                                            let hash = attempt_or!(bcrypt::hash(&new, bcrypt::DEFAULT_COST), {
+                                                eprintln!("Failed to hash password");
+                                                close!();
+                                            });
+                                            db.execute("UPDATE users SET password = ? WHERE id = ?", &[&hash, &(id as i64)])
+                                                .unwrap();
+                                            reset_token = true;
+                                        } else {
+                                            reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
+                                            reset_token = false;
+                                        }
                                     } else {
-                                        reply = Some(Packet::Err(common::ERR_LOGIN_INVALID));
+                                        reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
                                         reset_token = false;
                                     }
-                                } else {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
-                                    reset_token = false;
                                 }
                             }
                             if reset_token {
