@@ -75,7 +75,7 @@ fn main() {
                     groups      TEXT NOT NULL DEFAULT '',
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     last_ip     TEXT NOT NULL,
-                    name        TEXT NOT NULL,
+                    name        TEXT NOT NULL COLLATE NOCASE,
                     password    TEXT NOT NULL,
                     token       TEXT NOT NULL
                 )", &[])
