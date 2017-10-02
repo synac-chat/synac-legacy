@@ -69,15 +69,9 @@ fn main() {
         eprintln!("Just guessing here ¯\\_(ツ)_/¯");
         return;
     });
-    db.execute("CREATE TABLE IF NOT EXISTS users (
-                    ban         INTEGER NOT NULL DEFAULT 0,
-                    bot         INTEGER NOT NULL,
-                    groups      TEXT NOT NULL DEFAULT '',
+    db.execute("CREATE TABLE IF NOT EXISTS channels (
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    last_ip     TEXT NOT NULL,
-                    name        TEXT NOT NULL COLLATE NOCASE,
-                    password    TEXT NOT NULL,
-                    token       TEXT NOT NULL
+                    name        TEXT NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS groups (
@@ -91,9 +85,13 @@ fn main() {
         .expect("SQLite table creation failed");
     db.execute("INSERT OR IGNORE INTO groups VALUES (3, 0, 1, '@humans', 0, 1)", &[]).unwrap();
     db.execute("INSERT OR IGNORE INTO groups VALUES (3, 0, 2, '@bots',   0, 1)", &[]).unwrap();
-    db.execute("CREATE TABLE IF NOT EXISTS channels (
+    db.execute("CREATE TABLE IF NOT EXISTS messages (
+                    author      INTEGER NOT NULL,
+                    channel     INTEGER NOT NULL,
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    name        TEXT NOT NULL
+                    text        BLOB NOT NULL,
+                    timestamp   INTEGER NOT NULL,
+                    timestamp_edit  INTEGER
                 )", &[])
         .expect("SQLite table creation failed");
     db.execute("CREATE TABLE IF NOT EXISTS overrides (
@@ -103,13 +101,15 @@ fn main() {
                     [group]     INTEGER NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
-    db.execute("CREATE TABLE IF NOT EXISTS messages (
-                    author      INTEGER NOT NULL,
-                    channel     INTEGER NOT NULL,
+    db.execute("CREATE TABLE IF NOT EXISTS users (
+                    ban         INTEGER NOT NULL DEFAULT 0,
+                    bot         INTEGER NOT NULL,
+                    groups      TEXT NOT NULL DEFAULT '',
                     id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    text        BLOB NOT NULL,
-                    timestamp   INTEGER NOT NULL,
-                    timestamp_edit  INTEGER
+                    last_ip     TEXT NOT NULL,
+                    name        TEXT NOT NULL COLLATE NOCASE,
+                    password    TEXT NOT NULL,
+                    token       TEXT NOT NULL
                 )", &[])
         .expect("SQLite table creation failed");
 
