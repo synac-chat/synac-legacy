@@ -319,14 +319,16 @@ pub const RESERVED_ROLES: usize = 2;
 fn calculate_permissions(
         db: &SqlConnection,
         bot: bool,
-        ids: &[usize],
+        groups: &[usize],
         chan_overrides: Option<&HashMap<usize, (u8, u8)>>
     ) -> u8 {
     let mut query = String::with_capacity(48+3+1+14);
     query.push_str("SELECT allow, deny FROM groups WHERE id IN (");
     query.push_str(if bot { "2" } else { "1" });
-    if !ids.is_empty() { query.push_str(", "); }
-    query.push_str(&from_list(ids));
+    if !groups.is_empty() {
+        query.push_str(", ");
+        query.push_str(&from_list(groups));
+    }
     query.push_str(") ORDER BY pos");
 
     let mut stmt = db.prepare(&query).unwrap();
@@ -338,7 +340,7 @@ fn calculate_permissions(
 
     if let Some(chan_overrides) = chan_overrides {
         for (role, chan_perms) in chan_overrides {
-            if *role <= RESERVED_ROLES || ids.contains(&role) {
+            if *role <= RESERVED_ROLES || groups.contains(&role) {
                 common::perm_apply(&mut perms, *chan_perms);
             }
         }
@@ -1286,27 +1288,28 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
                             }
                         },
-                        Packet::UserUpdate(user) => {
+                        Packet::UserUpdate(event) => {
                             let id = get_id!();
                             rate_limit!(id, cheap);
+                            let user = get_user(&db, id).unwrap();
 
-                            if let Some(old) = get_user(&db, user.id) {
-                                if let Some(ban) = user.ban {
-                                    if user.id == id
-                                        || user.id == config.owner_id
+                            if let Some(old) = get_user(&db, event.id) {
+                                if let Some(ban) = event.ban {
+                                    if event.id == id
+                                        || event.id == config.owner_id
                                         || !has_perm(
                                         &config,
                                         id,
-                                        calculate_permissions_by_user(&db, id, None).unwrap(),
+                                        calculate_permissions(&db, user.bot, &user.groups, None),
                                         common::PERM_BAN
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                     } else {
                                         db.execute(
                                             "UPDATE users SET ban = ? WHERE id = ?",
-                                            &[&ban, &(user.id as i64)]
+                                            &[&ban, &(event.id as i64)]
                                         ).unwrap();
-                                        sessions.borrow_mut().retain(|_, ref session| session.id != Some(user.id));
+                                        sessions.borrow_mut().retain(|_, ref session| session.id != Some(event.id));
                                         broadcast = true;
                                         reply = Some(Packet::UserReceive(common::UserReceive {
                                             inner: common::User {
@@ -1318,11 +1321,11 @@ fn handle_client(
                                             }
                                         }));
                                     }
-                                } else if let Some(groups) = user.groups {
+                                } else if let Some(groups) = event.groups {
                                     if !has_perm(
                                         &config,
                                         id,
-                                        calculate_permissions_by_user(&db, id, None).unwrap(),
+                                        calculate_permissions(&db, user.bot, &user.groups, None),
                                         common::PERM_ASSIGN_GROUPS
                                     ) {
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
@@ -1340,7 +1343,12 @@ fn handle_client(
                                             }
                                         }
 
-                                        let correct = if id == config.owner_id {
+                                        let correct = if has_perm(
+                                            &config,
+                                            id,
+                                            calculate_permissions(&db, user.bot, &user.groups, None),
+                                            common::PERM_MANAGE_GROUPS
+                                        ) {
                                             let mut ok = true;
                                             for attr in changed {
                                                 if attr <= RESERVED_ROLES {
@@ -1368,7 +1376,7 @@ fn handle_client(
                                         if correct {
                                             db.execute(
                                                 "UPDATE users SET groups = ? WHERE id = ?",
-                                                &[&from_list(&groups), &(user.id as i64)]
+                                                &[&from_list(&groups), &(event.id as i64)]
                                             ).unwrap();
                                             broadcast = true;
                                             reply = Some(Packet::UserReceive(common::UserReceive {
@@ -1376,7 +1384,7 @@ fn handle_client(
                                                     ban: old.ban,
                                                     bot: old.bot,
                                                     groups: groups,
-                                                    id: user.id,
+                                                    id: event.id,
                                                     name: old.name
                                                 }
                                             }));

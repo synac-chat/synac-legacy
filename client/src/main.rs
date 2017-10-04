@@ -763,7 +763,7 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
 
             's' => common::PERM_ASSIGN_GROUPS,
             'c' => common::PERM_MANAGE_CHANNELS,
-            'a' => common::PERM_MANAGE_GROUPS,
+            'g' => common::PERM_MANAGE_GROUPS,
             'm' => common::PERM_MANAGE_MESSAGES,
             ' ' => continue,
             _   => return false
