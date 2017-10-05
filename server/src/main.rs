@@ -1127,11 +1127,9 @@ fn handle_client(
 
                             if let Some(msg) = get_message(&db, event.id) {
                                 let user = get_user(&db, id).unwrap();
-                                let channel = get_channel(&db, event.channel).unwrap();
+                                let channel = get_channel(&db, msg.channel).unwrap();
 
-                                if msg.channel != msg.channel {
-                                    reply = Some(Packet::Err(common::ERR_INVALID_CHANNEL));
-                                } else if msg.author != id && !has_perm(
+                                if msg.author != id && !has_perm(
                                     &config,
                                     id,
                                     calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
@@ -1140,8 +1138,8 @@ fn handle_client(
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
                                     db.execute(
-                                        "DELETE FROM messages WHERE channel = ? AND id = ?",
-                                        &[&(event.channel as i64), &(event.id as i64)]
+                                        "DELETE FROM messages WHERE id = ?",
+                                        &[&(event.id as i64)]
                                     ).unwrap();
 
                                     broadcast = true;
@@ -1164,12 +1162,10 @@ fn handle_client(
                             } else if let Some(msg) = get_message(&db, event.id) {
                                 let timestamp = Utc::now().timestamp();
 
-                                if msg.channel != msg.channel {
-                                    reply = Some(Packet::Err(common::ERR_INVALID_CHANNEL));
-                                } else if msg.author != id {
+                                if msg.author != id {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
                                 } else {
-                                    let channel = get_channel(&db, event.channel).unwrap();
+                                    let channel = get_channel(&db, msg.channel).unwrap();
 
                                     db.execute(
                                         "UPDATE messages SET text = ? WHERE id = ?",
@@ -1181,7 +1177,7 @@ fn handle_client(
                                     reply = Some(Packet::MessageReceive(common::MessageReceive {
                                         inner: common::Message {
                                             author: id,
-                                            channel: event.channel,
+                                            channel: msg.channel,
                                             id: event.id,
                                             text: event.text,
                                             timestamp: msg.timestamp,

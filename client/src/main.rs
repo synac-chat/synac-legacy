@@ -332,15 +332,9 @@ fn main() {
                             }))
                         } else { None },
                         "message" =>
-                            if let Some(channel) = session.channel {
-                                Some(Packet::MessageDelete(common::MessageDelete {
-                                    channel: channel,
-                                    id: id
-                                }))
-                            } else {
-                                println!("No channel selected!");
-                                continue;
-                            },
+                            Some(Packet::MessageDelete(common::MessageDelete {
+                                id: id
+                            })),
                         _ => {
                             println!("Unable to delete that");
                             continue;
@@ -682,7 +676,6 @@ fn main() {
                         };
                         let last = session.last.as_ref().unwrap();
                         Packet::MessageUpdate(common::MessageUpdate {
-                            channel: channel,
                             id: last.0,
                             text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
                         })
