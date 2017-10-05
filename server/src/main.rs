@@ -1152,44 +1152,6 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
-                        Packet::MessageUpdate(event) => {
-                            let id = get_id!();
-                            rate_limit!(id, cheap);
-
-                            if event.text.len() < config.limit_message_min
-                                || event.text.len() > config.limit_message_max {
-                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
-                            } else if let Some(msg) = get_message(&db, event.id) {
-                                let timestamp = Utc::now().timestamp();
-
-                                if msg.author != id {
-                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
-                                } else {
-                                    let channel = get_channel(&db, msg.channel).unwrap();
-
-                                    db.execute(
-                                        "UPDATE messages SET text = ? WHERE id = ?",
-                                        &[&event.text, &(event.id as i64)]
-                                    ).unwrap();
-
-                                    broadcast = true;
-                                    broadcast_in = Some(channel.overrides);
-                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
-                                        inner: common::Message {
-                                            author: id,
-                                            channel: msg.channel,
-                                            id: event.id,
-                                            text: event.text,
-                                            timestamp: msg.timestamp,
-                                            timestamp_edit: Some(timestamp)
-                                        },
-                                        new: true
-                                    }));
-                                }
-                            } else {
-                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
-                            }
-                        },
                         Packet::MessageList(params) => {
                             let id = get_id!();
                             rate_limit!(id, cheap);
@@ -1260,6 +1222,44 @@ fn handle_client(
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_CHANNEL));
+                            }
+                        },
+                        Packet::MessageUpdate(event) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if event.text.len() < config.limit_message_min
+                                || event.text.len() > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else if let Some(msg) = get_message(&db, event.id) {
+                                let timestamp = Utc::now().timestamp();
+
+                                if msg.author != id {
+                                    reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                } else {
+                                    let channel = get_channel(&db, msg.channel).unwrap();
+
+                                    db.execute(
+                                        "UPDATE messages SET text = ? WHERE id = ?",
+                                        &[&event.text, &(event.id as i64)]
+                                    ).unwrap();
+
+                                    broadcast = true;
+                                    broadcast_in = Some(channel.overrides);
+                                    reply = Some(Packet::MessageReceive(common::MessageReceive {
+                                        inner: common::Message {
+                                            author: id,
+                                            channel: msg.channel,
+                                            id: event.id,
+                                            text: event.text,
+                                            timestamp: msg.timestamp,
+                                            timestamp_edit: Some(timestamp)
+                                        },
+                                        new: true
+                                    }));
+                                }
+                            } else {
+                                reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
                         Packet::Typing(event) => {
