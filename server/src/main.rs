@@ -1317,7 +1317,7 @@ fn handle_client(
                                             }
                                         }));
                                     }
-                                } else if let Some(groups) = event.groups {
+                                } else if let Some(mut groups) = event.groups {
                                     if !has_perm(
                                         &config,
                                         id,
@@ -1327,6 +1327,9 @@ fn handle_client(
                                         reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION))
                                     } else {
                                         let mut changed = Vec::new();
+
+                                        groups.sort_unstable();
+                                        groups.dedup();
 
                                         for attr in &groups {
                                             if !old.groups.contains(attr) {

@@ -209,7 +209,10 @@ impl Screen {
                     continue;
                 }
                 if add {
-                    groups.push(id);
+                    if !groups.contains(&id) {
+                        groups.push(id);
+                        groups.sort_unstable();
+                    }
                     println!("Added: {}", group.name);
                 } else {
                     let pos = groups.iter().position(|item| *item == id);
