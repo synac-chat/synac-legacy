@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
-pub fn sanitize(text: String) -> String {
+pub fn sanitize(mut text: String) -> String {
     text.retain(|c| {
         !c.is_control() || c == '\n' || c == '\t'
     });
@@ -37,7 +37,7 @@ impl Screen {
 
         let thread = thread::spawn(move || {
             let mut cursive = Cursive::new();
-            cursive.set_fps(30);
+            cursive.set_fps(10);
 
             cursive.add_fullscreen_layer(
                 LinearLayout::horizontal()
