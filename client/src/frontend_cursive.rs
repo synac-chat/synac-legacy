@@ -10,6 +10,13 @@ use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
+pub fn sanitize(text: String) -> String {
+    text.retain(|c| {
+        !c.is_control() || c == '\n' || c == '\t'
+    });
+    text
+}
+
 pub struct Screen {
     line:   Mutex<mpsc::Receiver<String>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,

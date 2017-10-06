@@ -133,7 +133,10 @@ pub fn listen(
                                                             "{} (ID #{}): {}",
                                                             user.name,
                                                             msg.id,
-                                                            String::from_utf8_lossy(&msg.text).replace("\x1b", "\\e")
+                                                            frontend::sanitize(
+                                                                String::from_utf8_lossy(&msg.text)
+                                                                    .into_owned()
+                                                            )
                                                         ),
                                                         LogEntryId::Message(msg.id)
                                                     );

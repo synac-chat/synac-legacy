@@ -2,6 +2,7 @@ extern crate termion;
 
 use *;
 use rustyline::error::ReadlineError;
+use std::cmp;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Mutex, RwLock};
@@ -15,6 +16,16 @@ impl<'a> Drop for MuteGuard<'a> {
         self.0.mute.store(false, AtomicOrdering::Relaxed);
         self.0.repaint();
     }
+}
+
+pub fn sanitize(text: String) -> String {
+    // text.retain(|c| {
+    //     !c.is_control() || c == '\n' || c == '\t'
+    // });
+    // YES, that's right. Until that's stabilized, I'd rather clone the entire string
+    // than using difficult workarounds.
+    // TODO: Use `retain` to avoid allocation.
+    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
 }
 
 pub struct Screen {
@@ -48,7 +59,6 @@ impl Screen {
     }
 
     pub fn log(&self, text: String) {
-        debug_assert!(!text.contains('\n')); // Because that messes up the view (TODO remove?)
         self.log_with_id(text, LogEntryId::None);
     }
     pub fn log_with_id(&self, mut text: String, id: LogEntryId) {
@@ -88,19 +98,58 @@ impl Screen {
         }
         self.repaint_(&**self.log.read().unwrap());
     }
-    fn repaint_(&self, log: &[(String, LogEntryId)]) {
+    fn repaint_(&self, mut log: &[(String, LogEntryId)]) {
         let mut stdout = self.stdout.lock().unwrap();
-        let (_, height) = termion::terminal_size().unwrap_or((50, 50));
-        let log = &log[log.len().saturating_sub(height as usize - 3)..];
-        // TODO: Add a way to scroll...
+        let (width, height) = termion::terminal_size().unwrap_or((50, 50));
+        let cw =  width.saturating_sub(3) as usize;
+        let ch = height.saturating_sub(3) as usize;
+        loop {
+            let mut lines = 0;
+            for msg in log {
+                lines += 1;
+                for (i, c) in msg.0.chars().enumerate() {
+                    if (i != 0 && i % cw == 0) || c == '\n' {
+                        lines += 1;
+                    }
+                }
+            }
+
+            if lines <= ch {
+                break;
+            }
+            log = &log[1..];
+        }
 
         write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
 
         for &(ref text, id) in log {
-            if let LogEntryId::Sending = id {
-                writeln!(stdout, "{}{}{}", color::Fg(color::LightBlack), text, color::Fg(color::Reset)).unwrap();
-            } else {
-                writeln!(stdout, "{}", text).unwrap();
+            let indent_amount = text.chars().position(|c| c == ':').map(|i| i+2).unwrap_or_default();
+            let mut first  = true;
+            let mut indent = String::new();
+            let mut text   = &**text;
+
+            while text.len() > 0 {
+                if !first && indent.is_empty() {
+                    indent = " ".repeat(indent_amount);
+                } else {
+                    first = false;
+                }
+                let mut skip = 0;
+                let newline = text.chars().position(|c| c == '\n').map(|i| {skip += 1; i}).unwrap_or(std::usize::MAX);
+                let width = cmp::min(newline, cmp::min(cw, text.len()));
+                if let LogEntryId::Sending = id {
+                    writeln!(
+                        stdout,
+                        "{}{}{}{}",
+                        indent,
+                        color::Fg(color::LightBlack),
+                        &text[..width],
+                        color::Fg(color::Reset)
+                    ).unwrap();
+                } else {
+                    writeln!(stdout, "{}{}", indent, &text[..width]).unwrap();
+                }
+                text = &text[width..].trim_left();
             }
         }
 
