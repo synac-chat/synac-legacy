@@ -1,4 +1,4 @@
-# unnamed
+# schmic
 
 *Warning: Not everything here is implemented yet.  
 Development is going slowly but surely forwards.*
