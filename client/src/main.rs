@@ -186,6 +186,18 @@ fn main() {
         }
         editor.add_history_entry(&input);
 
+        macro_rules! require_session {
+            ($session:expr) => {
+                match *$session {
+                    Some(ref mut s) => s,
+                    None => {
+                        println!("You're not connected to a server");
+                        continue;
+                    }
+                }
+            }
+        }
+
         if input.starts_with('/') {
             let mut args = parser::parse(&input[1..]);
             if args.is_empty() {
@@ -214,18 +226,6 @@ fn main() {
                     if args.len() != $amount {
                         println!(concat!("Usage: /", $usage));
                         continue;
-                    }
-                }
-            }
-
-            macro_rules! require_session {
-                ($session:expr) => {
-                    match *$session {
-                        Some(ref mut s) => s,
-                        None => {
-                            println!("You're not connected to a server");
-                            continue;
-                        }
                     }
                 }
             }
@@ -656,46 +656,72 @@ fn main() {
                 }
             }
             continue;
-        }
-
-        match *session.lock().unwrap() {
-            None => {
-                println!("You are not connected to a server");
+        } else if input.starts_with('!') {
+            let mut session = session.lock().unwrap();
+            let session = require_session!(session);
+            let mut args = parser::parse(&input[1..]);
+            if args.len() < 2 {
                 continue;
-            },
-            Some(ref mut session) => {
-                if let Some(channel) = session.channel {
-                    let packet = if input.starts_with("s/") && session.last.is_some() {
-                        let mut parts = input[2..].splitn(2, '/');
-                        let find = match parts.next() {
-                            Some(some) => some,
-                            None => continue
-                        };
-                        let replace = match parts.next() {
-                            Some(some) => some,
-                            None => continue
-                        };
-                        let last = session.last.as_ref().unwrap();
-                        Packet::MessageUpdate(common::MessageUpdate {
-                            id: last.0,
-                            text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
-                        })
-                    } else {
-                        screen.log_with_id(format!("{}: {}", nick, input), LogEntryId::Sending);
-                        Packet::MessageCreate(common::MessageCreate {
-                            channel: channel,
-                            text: input.into_bytes()
-                        })
-                    };
+            }
+            let bot_name = args.remove(0);
 
-                    write!(session, packet, { continue; })
-                } else {
-                    println!("No channel specified. See /create channel, /list channels and /join");
-                    continue;
+            let mut recipient = None;
+            for user in session.users.values() {
+                if user.name == bot_name && user.bot {
+                    recipient = Some(user.id);
+                    break;
                 }
             }
+            if recipient.is_none() {
+                println!("No bot found with that name.");
+                continue;
+            }
+            let recipient = recipient.unwrap();
+
+            let packet = Packet::Command(common::Command {
+                args: args,
+                recipient: recipient
+            });
+
+            write!(session, packet, { continue; });
+
+            continue;
+        }
+
+        let mut session = session.lock().unwrap();
+        let session = require_session!(session);
+
+        if let Some(channel) = session.channel {
+            let packet = if input.starts_with("s/") && session.last.is_some() {
+                let mut parts = input[2..].splitn(2, '/');
+                let find = match parts.next() {
+                    Some(some) => some,
+                    None => continue
+                };
+                let replace = match parts.next() {
+                    Some(some) => some,
+                    None => continue
+                };
+                let last = session.last.as_ref().unwrap();
+                Packet::MessageUpdate(common::MessageUpdate {
+                    id: last.0,
+                    text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
+                })
+            } else {
+                screen.log_with_id(format!("{}: {}", nick, input), LogEntryId::Sending);
+                Packet::MessageCreate(common::MessageCreate {
+                    channel: channel,
+                    text: input.into_bytes()
+                })
+            };
+
+            write!(session, packet, { continue; })
+        } else {
+            println!("No channel specified. See /create channel, /list channels and /join");
+            continue;
         }
     }
+
     tx_stop.send(()).unwrap();
     if let Some(ref mut session) = *session.lock().unwrap() {
         let _ = common::write(&mut session.stream, &Packet::Close);

@@ -25,10 +25,11 @@ pub const ERR_MAX_CONN_PER_IP:    u8 = 7;
 pub const ERR_MISSING_FIELD:      u8 = 8;
 pub const ERR_MISSING_PERMISSION: u8 = 9;
 pub const ERR_NAME_TAKEN:         u8 = 10;
-pub const ERR_UNKNOWN_CHANNEL:    u8 = 11;
-pub const ERR_UNKNOWN_GROUP:      u8 = 12;
-pub const ERR_UNKNOWN_MESSAGE:    u8 = 13;
-pub const ERR_UNKNOWN_USER:       u8 = 14;
+pub const ERR_UNKNOWN_BOT:        u8 = 11;
+pub const ERR_UNKNOWN_CHANNEL:    u8 = 12;
+pub const ERR_UNKNOWN_GROUP:      u8 = 13;
+pub const ERR_UNKNOWN_MESSAGE:    u8 = 14;
+pub const ERR_UNKNOWN_USER:       u8 = 15;
 
 pub const PERM_READ:              u8 = 1;
 pub const PERM_WRITE:             u8 = 1 << 1;
@@ -92,8 +93,7 @@ pub struct ChannelUpdate {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Command {
-    pub author: usize,
-    pub parts: Vec<String>,
+    pub args: Vec<String>,
     pub recipient: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -170,9 +170,7 @@ pub struct ChannelReceive {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct CommandReceive {
     pub args: Vec<String>,
-    pub author: User,
-    pub command: String,
-    pub recipient: User
+    pub author: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct GroupDeleteReceive {

@@ -527,10 +527,12 @@ fn insert_channel_overrides(db: &SqlConnection, channel: usize, overrides: &Hash
         }
     }
 }
-fn write<T: std::io::Write>(writer: &mut T, packet: Packet) {
+fn write<T: std::io::Write>(writer: &mut T, packet: Packet) -> bool {
     attempt_or!(common::write(writer, &packet), {
         eprintln!("Failed to send reply");
+        return false;
     });
+    true
 }
 
 struct UserSession {
@@ -648,6 +650,7 @@ fn handle_client(
 
                     let mut broadcast = false;
                     let mut broadcast_in = None;
+                    let mut recipient = None;
                     let mut reply = None;
                     let mut send_init = false;
 
@@ -749,6 +752,31 @@ fn handle_client(
                                             id: channel.id,
                                             name: channel.name
                                         }
+                                    }));
+                                }
+                            }
+                        },
+                        Packet::Command(cmd) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if cmd.args.is_empty() {
+                                reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
+                            } else {
+                                let count: i64 = db.query_row(
+                                    "SELECT COUNT(*) FROM users WHERE id = ? AND bot = 1",
+                                    &[&(cmd.recipient as i64)],
+                                    |row| row.get(0)
+                                ).unwrap();
+
+                                if count == 0 {
+                                    reply = Some(Packet::Err(common::ERR_UNKNOWN_BOT));
+                                } else {
+                                    broadcast = true;
+                                    recipient = Some(cmd.recipient);
+                                    reply = Some(Packet::CommandReceive(common::CommandReceive {
+                                        args: cmd.args,
+                                        author: id
                                     }));
                                 }
                             }
@@ -1305,7 +1333,7 @@ fn handle_client(
                                             "UPDATE users SET ban = ? WHERE id = ?",
                                             &[&ban, &(event.id as i64)]
                                         ).unwrap();
-                                        sessions.borrow_mut().retain(|_, ref session| session.id != Some(event.id));
+                                        sessions.borrow_mut().retain(|_, s| s.id != Some(event.id));
                                         broadcast = true;
                                         reply = Some(Packet::UserReceive(common::UserReceive {
                                             inner: common::User {
@@ -1417,11 +1445,6 @@ fn handle_client(
                         }
                     };
 
-                    // Yes, I should be using io::write_all here - I very much agree.
-                    // However, io::write_all takes a writer, not a reference to one (understandable).
-                    // Sure, I could solve that with an Option (which I used to do).
-                    // However, if two things would try to write at once we'd have issues...
-
                     if broadcast {
                         let encoded = attempt_or!(common::serialize(&reply), {
                             eprintln!("Failed to serialize message");
@@ -1442,19 +1465,28 @@ fn handle_client(
                                         return true;
                                     }
                                 }
-                            } else {
-                                return true;
-                            }
-                            match s.writer.write_all(&size)
-                                .and_then(|_| s.writer.write_all(&encoded))
-                                .and_then(|_| s.writer.flush()) {
-                                Ok(ok) => ok,
-                                Err(err) => {
-                                    if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                        return false;
-                                    } else {
-                                        eprintln!("Failed to deliver message to User #{}", i);
-                                        eprintln!("Error kind: {}", err);
+                                if let Some(recipient) = recipient {
+                                    if recipient != id {
+                                        return true;
+                                    }
+                                }
+
+                                // Yes, I should be using io::write_all here - I very much agree.
+                                // However, io::write_all takes a writer, not a reference to one (understandable).
+                                // Sure, I could solve that with an Option (which I used to do).
+                                // However, if two things would try to write at once we'd have issues...
+
+                                match s.writer.write_all(&size)
+                                    .and_then(|_| s.writer.write_all(&encoded))
+                                    .and_then(|_| s.writer.flush()) {
+                                    Ok(ok) => ok,
+                                    Err(err) => {
+                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                            return false;
+                                        } else {
+                                            eprintln!("Failed to deliver message to connection #{}", i);
+                                            eprintln!("Error kind: {}", err);
+                                        }
                                     }
                                 }
                             }
