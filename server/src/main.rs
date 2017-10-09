@@ -534,6 +534,61 @@ fn write<T: std::io::Write>(writer: &mut T, packet: Packet) -> bool {
     });
     true
 }
+fn write_broadcast(
+    config: &Config,
+    db: &SqlConnection,
+    in_channel: Option<&HashMap<usize, (u8, u8)>>,
+    packet: &Packet,
+    recipient: Option<usize>,
+    sessions: &mut HashMap<usize, Session>
+) {
+    let encoded = attempt_or!(common::serialize(packet), {
+        eprintln!("Failed to serialize message");
+        return;
+    });
+    assert!(encoded.len() <= std::u16::MAX as usize);
+    let size = common::encode_u16(encoded.len() as u16);
+    sessions.retain(|i, s| {
+        if let Some(id) = s.id {
+            // Check if the user really has permission to read this message.
+            if let Some(ref overrides) = in_channel {
+                if !has_perm(
+                    &config,
+                    id,
+                    calculate_permissions_by_user(db, id, Some(overrides)).unwrap(),
+                    common::PERM_READ
+                ) {
+                    return true;
+                }
+            }
+            if let Some(recipient) = recipient {
+                if recipient != id {
+                    return true;
+                }
+            }
+
+            // Yes, I should be using io::write_all here - I very much agree.
+            // However, io::write_all takes a writer, not a reference to one (understandable).
+            // Sure, I could solve that with an Option (which I used to do).
+            // However, if two things would try to write at once we'd have issues...
+
+            match s.writer.write_all(&size)
+                .and_then(|_| s.writer.write_all(&encoded))
+                .and_then(|_| s.writer.flush()) {
+                Ok(ok) => ok,
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::BrokenPipe {
+                        return false;
+                    } else {
+                        eprintln!("Failed to deliver message to connection #{}", i);
+                        eprintln!("Error kind: {}", err);
+                    }
+                }
+            }
+        }
+        true
+    });
+}
 
 struct UserSession {
     packet_time_cheap: Instant,
@@ -1115,12 +1170,11 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else if let Some(channel) = get_channel(&db, msg.channel) {
                                 let timestamp = Utc::now().timestamp();
-                                let user = get_user(&db, id).unwrap();
 
                                 if !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
                                     common::PERM_WRITE
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1154,13 +1208,12 @@ fn handle_client(
                             rate_limit!(id, cheap);
 
                             if let Some(msg) = get_message(&db, event.id) {
-                                let user = get_user(&db, id).unwrap();
                                 let channel = get_channel(&db, msg.channel).unwrap();
 
                                 if msg.author != id && !has_perm(
                                     &config,
                                     id,
-                                    calculate_permissions(&db, user.bot, &user.groups, Some(&channel.overrides)),
+                                    calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
                                     common::PERM_MANAGE_MESSAGES
                                 ) {
                                     reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
@@ -1180,12 +1233,77 @@ fn handle_client(
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
                             }
                         },
+                        Packet::MessageDeleteBulk(event) => {
+                            if event.ids.is_empty() || event.ids.len() > common::LIMIT_BULK {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                // I would normally throw an exception if it is empty,
+                                // but bulk operations often get automated to avoid
+                                // the limit.
+
+                                let id = get_id!();
+                                rate_limit!(id, event.ids.len() != 1);
+
+                                if let Some(channel) = get_channel(&db, event.channel) {
+                                    let has = has_perm(
+                                        &config,
+                                        id,
+                                        calculate_permissions_by_user(&db, id, Some(&channel.overrides)).unwrap(),
+                                        common::PERM_MANAGE_MESSAGES
+                                    );
+
+                                    let list = from_list(&event.ids);
+                                    let correct = {
+                                        let mut query = String::with_capacity(43 + 1 + 39);
+                                        query.push_str("SELECT COUNT(*) FROM messages WHERE id IN (");
+                                        query.push_str(&list);
+                                        query.push_str(") AND channel = ? AND (? OR author = ?)");
+
+                                        let count: i64 = db.query_row(
+                                            &query,
+                                            &[&(event.channel as i64), &has, &(id as i64)],
+                                            |row| row.get(0)
+                                        ).unwrap();
+
+                                        count as usize == event.ids.len()
+                                    };
+
+                                    if !correct {
+                                        reply = Some(Packet::Err(common::ERR_MISSING_PERMISSION));
+                                        // NOTE: "MISSING PERMISSION" even if it's just the wrong channel
+                                        // or the message doesn't exist.
+                                        // Replace with a more generic error? Leave as is?
+                                    } else {
+                                        let mut query = String::with_capacity(34 + 1 + 1);
+                                        query.push_str("DELETE FROM messages WHERE id IN (");
+                                        query.push_str(&list);
+                                        query.push(')');
+
+                                        db.execute(&query, &[]).unwrap();
+
+                                        for msg in event.ids {
+                                            let packet = Packet::MessageDeleteReceive(common::MessageDeleteReceive {
+                                                id: msg
+                                            });
+                                            write_broadcast(
+                                                &config,
+                                                &db,
+                                                Some(&channel.overrides),
+                                                &packet,
+                                                None,
+                                                &mut sessions.borrow_mut()
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        },
                         Packet::MessageList(params) => {
                             let id = get_id!();
                             rate_limit!(id, cheap);
 
                             if let Some(channel) = get_channel(&db, params.channel) {
-                                if params.limit > common::LIMIT_MESSAGE_LIST {
+                                if params.limit == 0 || params.limit > common::LIMIT_BULK {
                                     reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                 } else if !has_perm(
                                     &config,
@@ -1446,52 +1564,14 @@ fn handle_client(
                     };
 
                     if broadcast {
-                        let encoded = attempt_or!(common::serialize(&reply), {
-                            eprintln!("Failed to serialize message");
-                            close!();
-                        });
-                        assert!(encoded.len() <= std::u16::MAX as usize);
-                        let size = common::encode_u16(encoded.len() as u16);
-                        sessions.borrow_mut().retain(|i, s| {
-                            if let Some(id) = s.id {
-                                // Check if the user really has permission to read this message.
-                                if let Some(ref overrides) = broadcast_in {
-                                    if !has_perm(
-                                        &config,
-                                        id,
-                                        calculate_permissions_by_user(&db, id, Some(overrides)).unwrap(),
-                                        common::PERM_READ
-                                    ) {
-                                        return true;
-                                    }
-                                }
-                                if let Some(recipient) = recipient {
-                                    if recipient != id {
-                                        return true;
-                                    }
-                                }
-
-                                // Yes, I should be using io::write_all here - I very much agree.
-                                // However, io::write_all takes a writer, not a reference to one (understandable).
-                                // Sure, I could solve that with an Option (which I used to do).
-                                // However, if two things would try to write at once we'd have issues...
-
-                                match s.writer.write_all(&size)
-                                    .and_then(|_| s.writer.write_all(&encoded))
-                                    .and_then(|_| s.writer.flush()) {
-                                    Ok(ok) => ok,
-                                    Err(err) => {
-                                        if err.kind() == std::io::ErrorKind::BrokenPipe {
-                                            return false;
-                                        } else {
-                                            eprintln!("Failed to deliver message to connection #{}", i);
-                                            eprintln!("Error kind: {}", err);
-                                        }
-                                    }
-                                }
-                            }
-                            true
-                        });
+                        write_broadcast(
+                            &config,
+                            &db,
+                            broadcast_in.as_ref(),
+                            &reply,
+                            recipient,
+                            &mut sessions.borrow_mut()
+                        );
                     } else {
                         let mut sessions = sessions.borrow_mut();
                         let writer = &mut sessions.get_mut(&conn_id).unwrap().writer;

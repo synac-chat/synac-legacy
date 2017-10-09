@@ -13,7 +13,7 @@ pub const LIMIT_ATTR_NAME:    usize = 128;
 pub const LIMIT_ATTR_AMOUNT:  usize = 2048;
 pub const LIMIT_MESSAGE:      usize = 16384;
 
-pub const LIMIT_MESSAGE_LIST: usize = 64;
+pub const LIMIT_BULK:         usize = 64;
 
 pub const ERR_ATTR_INVALID_POS:   u8 = 1;
 pub const ERR_ATTR_LOCKED_NAME:   u8 = 2;
@@ -136,6 +136,11 @@ pub struct MessageDelete {
     pub id: usize
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct MessageDeleteBulk {
+    pub channel: usize,
+    pub ids: Vec<usize>
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MessageList {
     pub after: Option<usize>,
     pub before: Option<usize>,
@@ -230,6 +235,7 @@ packet! {
     LoginUpdate,
     MessageCreate,
     MessageDelete,
+    MessageDeleteBulk,
     MessageList,
     MessageUpdate,
     Typing,
