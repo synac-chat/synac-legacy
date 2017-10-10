@@ -439,7 +439,7 @@ fn main() {
                                 after: None,
                                 before: None,
                                 channel: channel.id,
-                                limit: common::LIMIT_MESSAGE_LIST
+                                limit: common::LIMIT_BULK
                             }));
                             break;
                         }
