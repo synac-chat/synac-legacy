@@ -263,19 +263,6 @@ fn main() {
             let mut writer = BufWriter::new(writer);
 
             {
-                let count: i64 = db_clone.query_row(
-                    "SELECT COUNT(*) FROM users WHERE ban == 1 AND last_ip = ?",
-                    &[&addr.ip().to_string()],
-                    |row| row.get(0)
-                ).unwrap();
-
-                if count != 0 {
-                    write(&mut writer, Packet::Err(common::ERR_LOGIN_BANNED));
-                    return Ok(());
-                }
-            }
-
-            {
                 let mut ips = ips_clone.borrow_mut();
                 let conns = ips.entry(addr.ip()).or_insert(0);
                 if *conns >= config_clone.limit_connections_per_ip {
@@ -1009,7 +996,12 @@ fn handle_client(
                                 let row_password: String = row.get(4);
 
                                 if row_ban {
-                                    reply = Some(Packet::Err(common::ERR_LOGIN_BANNED));
+                                    {
+                                        let mut sessions = sessions.borrow_mut();
+                                        let session = sessions.get_mut(&conn_id).unwrap();
+                                        write(&mut session.writer, Packet::Err(common::ERR_LOGIN_BANNED));
+                                    }
+                                    close!();
                                 } else if row_bot == login.bot {
                                      if let Some(password) = login.password {
                                         let valid = attempt_or!(bcrypt::verify(&password, &row_password), {
@@ -1062,6 +1054,23 @@ fn handle_client(
                                     || login.name.len() > config.limit_user_name_max {
                                     reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                                 } else {
+                                    {
+                                        let count: i64 = db.query_row(
+                                            "SELECT COUNT(*) FROM users WHERE ban == 1 AND last_ip = ?",
+                                            &[&ip.to_string()],
+                                            |row| row.get(0)
+                                        ).unwrap();
+
+                                        if count != 0 {
+                                            {
+                                                let mut sessions = sessions.borrow_mut();
+                                                let session = sessions.get_mut(&conn_id).unwrap();
+                                                write(&mut session.writer, Packet::Err(common::ERR_LOGIN_BANNED));
+                                            }
+                                            close!();
+                                        }
+                                    }
+
                                     let password = attempt_or!(bcrypt::hash(&password, bcrypt::DEFAULT_COST), {
                                         eprintln!("Failed to hash password");
                                         close!();
