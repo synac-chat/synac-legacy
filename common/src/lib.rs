@@ -153,6 +153,11 @@ pub struct MessageUpdate {
     pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct PrivateMessage {
+    pub text: Vec<u8>,
+    pub recipient: usize
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Typing {
     pub channel: usize
 }
@@ -202,6 +207,11 @@ pub struct MessageReceive {
     pub new: bool
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct PMReceive {
+    pub text: Vec<u8>,
+    pub recipient: usize
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct TypingReceive {
     pub author: usize,
     pub channel: usize
@@ -238,6 +248,7 @@ packet! {
     MessageDeleteBulk,
     MessageList,
     MessageUpdate,
+    PrivateMessage,
     Typing,
     UserUpdate,
 
@@ -249,6 +260,7 @@ packet! {
     LoginSuccess,
     MessageDeleteReceive,
     MessageReceive,
+    PMReceive,
     TypingReceive,
     UserReceive
 }

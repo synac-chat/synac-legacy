@@ -802,8 +802,9 @@ fn handle_client(
                             let id = get_id!();
                             rate_limit!(id, cheap);
 
-                            if cmd.args.is_empty() {
-                                reply = Some(Packet::Err(common::ERR_MISSING_FIELD));
+                            let length = cmd.args.iter().fold(0, |acc, item| acc + item.len()) + (cmd.args.len() - 1);
+                            if length < config.limit_channel_name_min || length > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
                             } else {
                                 let count: i64 = db.query_row(
                                     "SELECT COUNT(*) FROM users WHERE id = ? AND bot = 1",
@@ -1415,6 +1416,32 @@ fn handle_client(
                                 }
                             } else {
                                 reply = Some(Packet::Err(common::ERR_UNKNOWN_MESSAGE));
+                            }
+                        },
+                        Packet::PrivateMessage(msg) => {
+                            let id = get_id!();
+                            rate_limit!(id, cheap);
+
+                            if msg.text.len() < config.limit_message_min
+                                || msg.text.len() > config.limit_message_max {
+                                reply = Some(Packet::Err(common::ERR_LIMIT_REACHED));
+                            } else {
+                                let count: i64 = db.query_row(
+                                    "SELECT COUNT(*) FROM users WHERE id = ? AND bot = 0",
+                                    &[&(msg.recipient as i64)],
+                                    |row| row.get(0)
+                                ).unwrap();
+
+                                if count == 0 {
+                                    reply = Some(Packet::Err(common::ERR_UNKNOWN_USER));
+                                } else {
+                                    broadcast = true;
+                                    recipient = Some(msg.recipient);
+                                    reply = Some(Packet::PMReceive(common::PMReceive {
+                                        text: msg.text,
+                                        recipient: msg.recipient
+                                    }));
+                                }
                             }
                         },
                         Packet::Typing(event) => {

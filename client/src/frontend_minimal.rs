@@ -136,7 +136,7 @@ impl Screen {
                 }
                 let mut skip = 0;
                 let newline = text.chars().position(|c| c == '\n').map(|i| {skip += 1; i}).unwrap_or(std::usize::MAX);
-                let width = cmp::min(newline, cmp::min(cw, text.len()));
+                let width = cmp::min(newline, cmp::min(cw.saturating_sub(indent_amount), text.len()));
                 if let LogEntryId::Sending = id {
                     writeln!(
                         stdout,

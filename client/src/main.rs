@@ -9,6 +9,7 @@ extern crate common;
 use common::Packet;
 use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream};
 use rusqlite::Connection as SqlConnection;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::net::{SocketAddr, TcpStream};
@@ -22,6 +23,7 @@ mod frontend_minimal;
 #[cfg(feature = "cursive")]
 mod frontend_cursive;
 mod connect;
+mod encrypter;
 mod listener;
 mod parser;
 
@@ -98,30 +100,37 @@ fn main() {
             return;
         }
     };
-    db.execute("CREATE TABLE IF NOT EXISTS servers (
-                    ip      TEXT NOT NULL UNIQUE,
-                    key     BLOB NOT NULL,
-                    token   TEXT
-                )", &[])
-        .expect("Couldn't create SQLite table");
     db.execute("CREATE TABLE IF NOT EXISTS data (
                     key     TEXT NOT NULL UNIQUE,
                     value   TEXT NOT NULL
+                )", &[])
+        .expect("Couldn't create SQLite table");
+    db.execute("CREATE TABLE IF NOT EXISTS pms (
+                    private     BLOB,
+                    public      BLOB,
+                    recipient   INTEGER NOT NULL PRIMARY KEY
+                )", &[])
+        .expect("Couldn't create SQLite table");
+    db.execute("CREATE TABLE IF NOT EXISTS servers (
+                    ip      TEXT NOT NULL PRIMARY KEY,
+                    key     BLOB NOT NULL,
+                    token   TEXT
                 )", &[])
         .expect("Couldn't create SQLite table");
 
     let mut nick = {
         let mut stmt = db.prepare("SELECT value FROM data WHERE key = 'nick'").unwrap();
         let mut rows = stmt.query(&[]).unwrap();
+
         if let Some(row) = rows.next() {
-            row.unwrap().get(0)
+            Cow::from(row.unwrap().get::<_, String>(0))
         } else {
             #[cfg(unix)]
-            { env::var("USER").unwrap_or_else(|_| "unknown".to_string()) }
+            { env::var("USER").map(|nick| Cow::from(nick)).unwrap_or_else(|_| Cow::from("unknown")) }
             #[cfg(windows)]
-            { env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string()) }
+            { env::var("USERNAME").map(|nick| Cow::from(nick)).unwrap_or_else(|_| Cow::from("unknown")) }
             #[cfg(not(any(unix, windows)))]
-            { String::from("unknown") }
+            { Cow::from("unknown") }
         }
     };
 
@@ -502,27 +511,92 @@ fn main() {
                         _ => println!("Unable to list that")
                     }
                 },
+                "msg" => {
+                    usage!(2, "msg <user id> <message>");
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+
+                    let id: usize = match args[0].parse() {
+                        Ok(ok) => ok,
+                        Err(_) => {
+                            println!("Not a valid number");
+                            continue;
+                        }
+                    };
+
+                    let public = {
+                        let db = db.lock().unwrap();
+                        let mut stmt = db.prepare_cached("SELECT public FROM pms WHERE recipient = ?").unwrap();
+                        let mut rows = stmt.query(&[&(id as i64)]).unwrap();
+
+                        if let Some(row) = rows.next() {
+                            let row = row.unwrap();
+                            row.get::<_, String>(0)
+                        } else {
+                            println!("In order to encrypt your message, we need something called a \"public key\".");
+                            println!("You will be asked to enter it here. When you've entered it, type \"END\".");
+                            println!("Enter public key:");
+
+                            let mut key = String::with_capacity(512); // idk, just guessing
+                            loop {
+                                let line = readline!({ break; });
+                                if line == "END" { break; }
+
+                                key.push_str(&line);
+                                key.push('\n');
+                            }
+
+                            db.execute(
+                                "REPLACE INTO pms (public, recipient) VALUES (?, ?)",
+                                &[&key, &(id as i64)]
+                            ).unwrap();
+
+                            key
+                        }
+                    };
+                    use openssl::rsa::Rsa;
+                    let rsa = match Rsa::public_key_from_pem(public.as_bytes()) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!("Error! Is that valid PEM data?");
+                            println!("Details: {}", err);
+                            continue;
+                        }
+                    };
+                    let packet = Packet::PrivateMessage(common::PrivateMessage {
+                        text: match encrypter::encrypt(args[1].as_bytes(), &rsa) {
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                println!("Error! Failed to encrypt! D:");
+                                continue;
+                            }
+                        },
+                        recipient: id
+                    });
+                    write!(session, packet, {});
+                },
                 "nick" => {
                     usage!(1, "nick <name>");
-                    nick = args.remove(0);
+                    let new = args.remove(0);
 
                     db.lock().unwrap().execute(
                         "REPLACE INTO data (key, value) VALUES ('nick', ?)",
-                        &[&nick]
+                        &[&new]
                     ).unwrap();
 
                     let mut session = session.lock().unwrap();
                     if let Some(ref mut session) = *session {
                         let packet = Packet::LoginUpdate(common::LoginUpdate {
-                            name: Some(nick.clone()),
+                            name: Some(new.clone()),
                             password_current: None,
                             password_new: None,
                             reset_token: false
                         });
-                        write!(session, packet, { continue; })
+                        write!(session, packet, {});
                     }
 
-                    println!("Your name is now {}", nick);
+                    println!("Your name is now {}", new);
+                    nick = Cow::from(new);
                 },
                 "passwd" => {
                     usage!(0, "passwd");
