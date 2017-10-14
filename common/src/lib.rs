@@ -208,8 +208,8 @@ pub struct MessageReceive {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct PMReceive {
-    pub text: Vec<u8>,
-    pub recipient: usize
+    pub author: usize,
+    pub text: Vec<u8>
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct TypingReceive {

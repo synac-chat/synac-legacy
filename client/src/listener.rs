@@ -146,9 +146,40 @@ pub fn listen(
                                                 }
                                             }
                                         },
+                                        Packet::PMReceive(msg) => {
+                                            let db = db.lock().unwrap();
+                                            let mut stmt = db.prepare_cached("SELECT private FROM pms WHERE recipient = ?")
+                                                .unwrap();
+                                            let mut rows = stmt.query(&[&(msg.author as i64)]).unwrap();
+
+                                            if let Some(row) = rows.next() {
+                                                let row = row.unwrap();
+
+                                                use openssl::rsa::Rsa;
+                                                match Rsa::private_key_from_pem(&row.get::<_, Vec<u8>>(0)) {
+                                                    Ok(rsa) => {
+                                                        if let Ok(decrypted) = ::encrypter::decrypt(&msg.text, &rsa) {
+                                                            let user = session.users.get(&msg.author)
+                                                                .map(|user| &*user.name)
+                                                                .unwrap_or("unknown");
+                                                            println!(
+                                                                "{} privately messaged you: {}",
+                                                                user,
+                                                                String::from_utf8_lossy(&decrypted)
+                                                            );
+                                                        }
+                                                    },
+                                                    Err(err) => {
+                                                        println!("Failed to deserialize PEM.");
+                                                        println!("Did you edit the SQLite database?");
+                                                        println!("Details: {}", err);
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Packet::RateLimited(time) => {
                                             println!("Slow down! You may try again in {} seconds.", time);
-                                        }
+                                        },
                                         Packet::TypingReceive(event) => {
                                             if event.author != session.id {
                                                 session.typing.insert((event.author, event.channel), Instant::now());

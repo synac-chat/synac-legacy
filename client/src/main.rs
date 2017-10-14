@@ -106,8 +106,8 @@ fn main() {
                 )", &[])
         .expect("Couldn't create SQLite table");
     db.execute("CREATE TABLE IF NOT EXISTS pms (
-                    private     BLOB,
-                    public      BLOB,
+                    private     BLOB NOT NULL,
+                    public      BLOB NOT NULL,
                     recipient   INTEGER NOT NULL PRIMARY KEY
                 )", &[])
         .expect("Couldn't create SQLite table");
@@ -512,14 +512,14 @@ fn main() {
                     }
                 },
                 "msg" => {
-                    usage!(2, "msg <user id> <message>");
+                    usage!(2, "msg <user> <message>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
 
-                    let id: usize = match args[0].parse() {
-                        Ok(ok) => ok,
-                        Err(_) => {
-                            println!("Not a valid number");
+                    let id = match find_user(&session.users, &args[0]) {
+                        Some(user) => user.id,
+                        None => {
+                            println!("No such user");
                             continue;
                         }
                     };
@@ -533,25 +533,8 @@ fn main() {
                             let row = row.unwrap();
                             row.get::<_, String>(0)
                         } else {
-                            println!("In order to encrypt your message, we need something called a \"public key\".");
-                            println!("You will be asked to enter it here. When you've entered it, type \"END\".");
-                            println!("Enter public key:");
-
-                            let mut key = String::with_capacity(512); // idk, just guessing
-                            loop {
-                                let line = readline!({ break; });
-                                if line == "END" { break; }
-
-                                key.push_str(&line);
-                                key.push('\n');
-                            }
-
-                            db.execute(
-                                "REPLACE INTO pms (public, recipient) VALUES (?, ?)",
-                                &[&key, &(id as i64)]
-                            ).unwrap();
-
-                            key
+                            println!("Please run `/setupkeys {}` first", id);
+                            continue;
                         }
                     };
                     use openssl::rsa::Rsa;
@@ -568,6 +551,7 @@ fn main() {
                             Ok(ok) => ok,
                             Err(err) => {
                                 println!("Error! Failed to encrypt! D:");
+                                println!("{}", err);
                                 continue;
                             }
                         },
@@ -620,6 +604,59 @@ fn main() {
                     let _ = rx_sent.recv_timeout(Duration::from_secs(10));
                 },
                 "quit" => break,
+                "setupkeys" => {
+                    usage!(1, "setupkeys <user id>");
+
+                    let mut session = session.lock().unwrap();
+                    let session = require_session!(session);
+
+                    let id = match find_user(&session.users, &args[0]) {
+                        Some(user) => user.id,
+                        None => {
+                            println!("No such user");
+                            continue;
+                        }
+                    };
+
+                    println!("In order to secure your connection, we need two things:");
+                    use openssl::rsa::Rsa;
+                    let rsa = match Rsa::generate(3072) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!("Error! Failed to generate a key pair.");
+                            println!("Details: {}", err);
+                            continue;
+                        }
+                    };
+                    let private = rsa.private_key_to_pem().unwrap();
+                    let public  =  rsa.public_key_to_pem().unwrap();
+
+                    println!("1. You need to give your recipient this \"public key\":");
+                    println!("{}", String::from_utf8_lossy(&public));
+                    println!("2. Have your recipient run /setupkeys too.");
+                    println!("You will be asked to enter his/her public key here.");
+                    println!("When you've entered it, type \"END\".");
+                    println!("Enter his/her public key here:");
+
+                    let mut key = String::with_capacity(512); // idk, just guessing
+                    loop {
+                        let line = readline!({ break; });
+                        if line == "END" { break; }
+
+                        key.push_str(&line);
+                        key.push('\n');
+                    }
+
+                    if let Err(err) = Rsa::public_key_from_pem(key.as_bytes()) {
+                        println!("Error! Did you enter it correctly?");
+                        println!("Details: {}", err);
+                        continue;
+                    }
+                    db.lock().unwrap().execute(
+                        "REPLACE INTO pms (private, public, recipient) VALUES (?, ?, ?)",
+                        &[&private, &key, &(id as i64)]
+                    ).unwrap();
+                },
                 "update" => {
                     usage!(2, "update <\"group\"/\"channel\"> <id>");
 
@@ -737,20 +774,13 @@ fn main() {
             if args.len() < 2 {
                 continue;
             }
-            let bot_name = args.remove(0);
+            let name = args.remove(0);
 
-            let mut recipient = None;
-            for user in session.users.values() {
-                if user.name == bot_name && user.bot {
-                    recipient = Some(user.id);
-                    break;
-                }
-            }
-            if recipient.is_none() {
-                println!("No bot found with that name.");
-                continue;
-            }
-            let recipient = recipient.unwrap();
+            let recipient = match find_user(&session.users, &name) {
+                Some(user) if user.bot => user.id,
+                Some(_) => { println!("That's not a bot!"); continue; },
+                None => { println!("No such user"); continue; }
+            };
 
             let packet = Packet::Command(common::Command {
                 args: args,
@@ -804,6 +834,9 @@ fn main() {
     screen.stop();
 }
 
+fn find_user<'a>(users: &'a HashMap<usize, common::User>, name: &str) -> Option<&'a common::User> {
+    users.values().find(|user| user.name == name)
+}
 fn to_perm_string(allow: u8, deny: u8) -> String {
     let mut result = String::with_capacity(10);
 

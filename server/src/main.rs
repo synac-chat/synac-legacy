@@ -1438,8 +1438,8 @@ fn handle_client(
                                     broadcast = true;
                                     recipient = Some(msg.recipient);
                                     reply = Some(Packet::PMReceive(common::PMReceive {
-                                        text: msg.text,
-                                        recipient: msg.recipient
+                                        author: id,
+                                        text: msg.text
                                     }));
                                 }
                             }

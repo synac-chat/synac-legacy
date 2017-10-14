@@ -46,7 +46,7 @@ pub fn encrypt(input: &[u8], rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Err
 
     Ok(encrypted)
 }
-pub fn decrypt(input: &[u8], rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Error>> {
+pub fn decrypt(mut input: &[u8], rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Error>> {
     if input.len() <= 4 {
         return Err(Box::new(ErrBounds));
     }
@@ -57,9 +57,10 @@ pub fn decrypt(input: &[u8], rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Err
     if input.len() != 4+size_rsa+size_aes {
         return Err(Box::new(ErrBounds));
     }
+    input = &input[4..];
 
     let mut keyiv = vec![0; size_rsa];
-    rsa.private_decrypt(&input[4..size_rsa], &mut keyiv, PKCS1_PADDING)?;
+    rsa.private_decrypt(&input[..size_rsa], &mut keyiv, PKCS1_PADDING)?;
     keyiv.truncate(32+16);
 
     let (key, iv) = keyiv.split_at(32);
