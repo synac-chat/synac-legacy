@@ -1,5 +1,6 @@
 #![cfg_attr(feature = "cursive", feature(fnbox))]
 #![cfg_attr(feature = "cursive", feature(string_retain))]
+#![cfg_attr(feature = "cursive", feature(refcell_replace_swap))]
 
 extern crate openssl;
 extern crate rusqlite;

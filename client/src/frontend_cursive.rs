@@ -5,10 +5,17 @@ use self::cursive::Cursive;
 use self::cursive::view::{Identifiable, ScrollStrategy};
 use self::cursive::views::*;
 use std::boxed::FnBox;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Mutex, RwLock};
 use std::thread;
+
+macro_rules! id_touple {
+    ($id:expr) => {
+        (concat!("+", $id), concat!("=", $id), concat!("-", $id))
+    }
+}
 
 pub fn sanitize(mut text: String) -> String {
     text.retain(|c| {
@@ -203,22 +210,35 @@ impl Screen {
         })).unwrap();
     }
 
-    pub fn get_user_groups(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
-        Err(())
-    }
     pub fn get_channel_overrides(&self, overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
-        let names: HashMap<usize, String> = session.groups.iter()
-            .map(|(id, group)| (*id, group.name.clone()))
+        let names: HashMap<_, _> = session.groups.iter()
+            .map(|(id, group)| (*id, group.name.clone())) // Sorry for cloning, but I don't see any other way :(
             .collect();
 
+        let (tx, rx): (mpsc::Sender<HashMap<usize, (u8, u8)>>, mpsc::Receiver<_>) = mpsc::channel();
+
         self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
-            let mut group_read    = RadioGroup::new();
-            let mut group_write   = RadioGroup::new();
-            let mut group_channel = RadioGroup::new();
+            let group_read    = Rc::new(RefCell::new(RadioGroup::new()));
+            let group_write   = Rc::new(RefCell::new(RadioGroup::new()));
+            let group_channel = Rc::new(RefCell::new(RadioGroup::new()));
+            let group_read_clone    = Rc::clone(&group_read);
+            let group_write_clone   = Rc::clone(&group_write);
+            let group_channel_clone = Rc::clone(&group_channel);
+            let group_read_clone2    = Rc::clone(&group_read);
+            let group_write_clone2   = Rc::clone(&group_write);
+            let group_channel_clone2 = Rc::clone(&group_channel);
 
             let names = Rc::new(names);
             let names_clone = Rc::clone(&names);
+
+            let overrides = Rc::new(RefCell::new(overrides));
+            let overrides_clone  = Rc::clone(&overrides);
+            let overrides_clone2 = Rc::clone(&overrides);
+            let overrides_clone3 = Rc::clone(&overrides);
+
+            let last = Rc::new(RefCell::new(None));
+            let last_clone = Rc::clone(&last);
 
             cursive.add_layer(Dialog::new()
                     .title("Channel override")
@@ -226,36 +246,72 @@ impl Screen {
                         .child(SelectView::new()
                             .popup()
                             .item_str("Select a role")
+                            .on_submit(move |cursive: &mut Cursive, label: &str| {
+                                if let Some(id) = *last.borrow() {
+                                    let bitmask = bitmask_for_buttons(
+                                        &group_read_clone.borrow(),
+                                        &group_write_clone.borrow(),
+                                        &group_channel_clone.borrow()
+                                    );
+                                    overrides_clone.borrow_mut().insert(id, bitmask);
+                                }
+
+                                if let Some(id) = label.split(":").next().and_then(|id| id.parse().ok()) {
+                                    // This is the most horrible, hacky, disgusting code I've written this week.
+                                    // I tried keeping a map of index -> id, but in the end I failed.
+
+                                    *last.borrow_mut() = Some(id);
+
+                                    buttons_for_bitmask(
+                                        overrides_clone3.borrow_mut()
+                                            .get(&id)
+                                            .map(|item| *item)
+                                            .unwrap_or_default(),
+                                        cursive
+                                    )
+                                }
+                            })
                             .with_id("role"))
-                        .child(checkbox(&mut group_read, "Read messages in this channel"))
-                        .child(checkbox(&mut group_write, "Send messages in this channel"))
-                        .child(checkbox(&mut group_channel, "Manage this channel")))
+                        .child(checkbox(&mut group_read.borrow_mut(), id_touple!("read"), "Read messages in this channel"))
+                        .child(checkbox(&mut group_write.borrow_mut(), id_touple!("write"), "Send messages in this channel"))
+                        .child(checkbox(&mut group_channel.borrow_mut(), id_touple!("channel"), "Manage this channel")))
                     .button("Add", move |cursive| {
                         cursive.add_layer(Dialog::around(SelectView::new()
-                            .with_all_str(names_clone.iter().map(|(id, name)| {
+                            .with_all_str(names.iter().map(|(id, name)| {
                                 let mut result = id.to_string();
                                 result.reserve(2 + name.len());
                                 result.push_str(": ");
                                 result.push_str(&name);
                                 result
                             }))
-                            .on_submit(|cursive: &mut Cursive, string: &str| {
+                            .on_submit(move |cursive: &mut Cursive, string: &str| {
                                 cursive.pop_layer();
                                 cursive.call_on_id("role", |select: &mut SelectView| {
                                     select.add_item_str(string.to_string());
+                                    let pos = select.len()-1;
+                                    select.set_selection(pos);
                                 });
                             })
                         ).dismiss_button("Cancel"));
                     })
-                    .button("Finish", |cursive| {
+                    .button("Finish", move |cursive| {
                         cursive.pop_layer();
-                        // TODO return stuff
+
+                        if let Some(last) = *last_clone.borrow() {
+                            let bitmask = bitmask_for_buttons(
+                                &group_read_clone2.borrow(),
+                                &group_write_clone2.borrow(),
+                                &group_channel_clone2.borrow()
+                            );
+                            overrides_clone2.borrow_mut().insert(last, bitmask);
+                        }
+                        tx.send(overrides_clone2.replace(HashMap::new())).unwrap();
                     }));
 
             cursive.call_on_id("role", |select: &mut SelectView| {
-                select.add_all_str(overrides.keys().map(|id| {
+                select.add_all_str(overrides.borrow().keys().map(|id| {
                     let mut result = id.to_string();
-                    if let Some(name) = names.get(&id) {
+                    if let Some(name) = names_clone.get(&id) {
                         result.reserve(2 + name.len());
                         result.push_str(": ");
                         result.push_str(&name);
@@ -264,14 +320,62 @@ impl Screen {
                 }));
             });
         })).unwrap();
+
+        Ok(rx.recv().unwrap())
+    }
+    pub fn get_user_groups(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
         Err(())
     }
 }
-fn checkbox<S: Into<String>>(group: &mut RadioGroup<String>, text: S) -> LinearLayout {
+fn checkbox<S: Into<String>>(group: &mut RadioGroup<String>, id: (S, S, S), text: S) -> LinearLayout {
+    // If only concat! would work on &'static str...
     LinearLayout::horizontal()
         .child(BoxView::with_fixed_width(40, TextView::new(text)))
         .child(DummyView)
-        .child(group.button_str(""))
-        .child(group.button_str(""))
-        .child(group.button_str(""))
+        .child(group.button_str("").with_id(id.0))
+        .child(group.button_str("").with_id(id.1))
+        .child(group.button_str("").with_id(id.2))
+}
+fn bitmask_for_buttons(
+    read:    &RadioGroup<String>,
+    write:   &RadioGroup<String>,
+    channel: &RadioGroup<String>
+) -> (u8, u8) {
+    let mut allow = 0;
+    let mut deny = 0;
+
+    if read.selected_id()    == 0 { allow |= common::PERM_READ }
+    if write.selected_id()   == 0 { allow |= common::PERM_WRITE }
+    if channel.selected_id() == 0 { allow |= common::PERM_MANAGE_CHANNELS }
+    if read.selected_id()    == 2 { deny  |= common::PERM_READ }
+    if write.selected_id()   == 2 { deny  |= common::PERM_WRITE }
+    if channel.selected_id() == 2 { deny  |= common::PERM_MANAGE_CHANNELS }
+
+    // Admit it, this isn't the worst code you've seen me write.
+
+    (allow, deny)
+}
+fn buttons_for_bitmask(bitmask: (u8, u8), cursive: &mut Cursive) {
+    let (allow, deny) = bitmask;
+
+    macro_rules! toggle {
+        ($allow:expr, $deny:expr, $($perm:ident as $button:expr),+) => {
+            $(
+                {
+                    let touple = id_touple!($button);
+                    let button = if $allow & common::$perm == common::$perm { touple.0 }
+                            else if $deny  & common::$perm == common::$perm { touple.2 }
+                            else { touple.1 };
+
+                    cursive.call_on_id(button, |button: &mut RadioButton<String>| button.select());
+                }
+            )+
+        }
+    }
+    toggle!(
+        allow, deny,
+        PERM_READ as "read",
+        PERM_WRITE as "write",
+        PERM_MANAGE_CHANNELS as "channel"
+    );
 }

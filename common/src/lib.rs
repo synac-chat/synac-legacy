@@ -41,13 +41,13 @@ pub const PERM_MANAGE_GROUPS:     u8 = 1 << 5;
 pub const PERM_MANAGE_MESSAGES:   u8 = 1 << 6;
 
 // TYPES
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Channel {
     pub id: usize,
     pub name: String,
     pub overrides: HashMap<usize, (u8, u8)>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Group {
     pub allow: u8,
     pub deny: u8,
@@ -56,7 +56,7 @@ pub struct Group {
     pub pos: usize,
     pub unassignable: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Message {
     pub author: usize,
     pub channel: usize,
@@ -65,7 +65,7 @@ pub struct Message {
     pub timestamp: i64,
     pub timestamp_edit: Option<i64>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct User {
     pub ban: bool,
     pub bot: bool,
@@ -75,28 +75,28 @@ pub struct User {
 }
 
 // CLIENT PACKETS
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Close {}
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelCreate {
     pub name: String,
     pub overrides: HashMap<usize, (u8, u8)>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelDelete {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelUpdate {
     pub inner: Channel,
     pub keep_overrides: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Command {
     pub args: Vec<String>,
     pub recipient: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupCreate {
     pub allow: u8,
     pub deny: u8,
@@ -104,64 +104,64 @@ pub struct GroupCreate {
     pub pos: usize,
     pub unassignable: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupDelete {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupUpdate {
     pub inner: Group
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Login {
     pub bot: bool,
     pub name: String,
     pub password: Option<String>,
     pub token: Option<String>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LoginUpdate {
     pub name: Option<String>,
     pub password_current: Option<String>,
     pub password_new: Option<String>,
     pub reset_token: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageCreate {
     pub channel: usize,
     pub text: Vec<u8>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageDelete {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageDeleteBulk {
     pub channel: usize,
     pub ids: Vec<usize>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageList {
     pub after: Option<usize>,
     pub before: Option<usize>,
     pub channel: usize,
     pub limit: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageUpdate {
     pub id: usize,
     pub text: Vec<u8>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PrivateMessage {
     pub text: Vec<u8>,
     pub recipient: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Typing {
     pub channel: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UserUpdate {
     pub ban: Option<bool>,
     pub groups: Option<Vec<usize>>,
@@ -169,61 +169,61 @@ pub struct UserUpdate {
 }
 
 // SERVER PACKETS
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelDeleteReceive {
     pub inner: Channel
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelReceive {
     pub inner: Channel
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CommandReceive {
     pub args: Vec<String>,
     pub author: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupDeleteReceive {
     pub inner: Group
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupReceive {
     pub inner: Group,
     pub new: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LoginSuccess {
     pub created: bool,
     pub id: usize,
     pub token: String
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageDeleteReceive {
     pub id: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MessageReceive {
     pub inner: Message,
     pub new: bool
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PMReceive {
     pub author: usize,
     pub text: Vec<u8>
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TypingReceive {
     pub author: usize,
     pub channel: usize
 }
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UserReceive {
     pub inner: User
 }
 
 macro_rules! packet {
     ($($type:ident),+) => {
-        #[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
         #[serde(/*tag = "type",*/ rename_all = "snake_case")]
         pub enum Packet {
             Close,
