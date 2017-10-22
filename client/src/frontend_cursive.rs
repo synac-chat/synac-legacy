@@ -92,6 +92,7 @@ impl Screen {
                     callback.call_box((&mut cursive,));
                 }
                 cursive.step();
+                thread::sleep(Duration::from_millis(100));
             }
         });
 

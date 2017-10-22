@@ -518,47 +518,49 @@ fn main() {
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
 
-                    let id = match find_user(&session.users, &args[0]) {
-                        Some(user) => user.id,
-                        None => {
-                            println!("No such user");
-                            continue;
-                        }
-                    };
-
-                    let public = {
-                        let db = db.lock().unwrap();
-                        let mut stmt = db.prepare_cached("SELECT public FROM pms WHERE recipient = ?").unwrap();
-                        let mut rows = stmt.query(&[&(id as i64)]).unwrap();
-
-                        if let Some(row) = rows.next() {
-                            let row = row.unwrap();
-                            row.get::<_, String>(0)
-                        } else {
-                            println!("Please run `/setupkeys {}` first", id);
-                            continue;
-                        }
-                    };
-                    use openssl::rsa::Rsa;
-                    let rsa = match Rsa::public_key_from_pem(public.as_bytes()) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            println!("Error! Is that valid PEM data?");
-                            println!("Details: {}", err);
-                            continue;
-                        }
-                    };
-                    let packet = Packet::PrivateMessage(common::PrivateMessage {
-                        text: match encrypter::encrypt(args[1].as_bytes(), &rsa) {
-                            Ok(ok) => ok,
-                            Err(err) => {
-                                println!("Error! Failed to encrypt! D:");
-                                println!("{}", err);
+                    let packet = {
+                        let user = match find_user(&session.users, &args[0]) {
+                            Some(user) => user,
+                            None => {
+                                println!("No such user");
                                 continue;
                             }
-                        },
-                        recipient: id
-                    });
+                        };
+
+                        let public = {
+                            let db = db.lock().unwrap();
+                            let mut stmt = db.prepare_cached("SELECT public FROM pms WHERE recipient = ?").unwrap();
+                            let mut rows = stmt.query(&[&(user.id as i64)]).unwrap();
+
+                            if let Some(row) = rows.next() {
+                                let row = row.unwrap();
+                                row.get::<_, String>(0)
+                            } else {
+                                println!("Please run `/setupkeys {}` first", user.name);
+                                continue;
+                            }
+                        };
+                        use openssl::rsa::Rsa;
+                        let rsa = match Rsa::public_key_from_pem(public.as_bytes()) {
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                println!("Error! Is that valid PEM data?");
+                                println!("Details: {}", err);
+                                continue;
+                            }
+                        };
+                        Packet::PrivateMessage(common::PrivateMessage {
+                            text: match encrypter::encrypt(args[1].as_bytes(), &rsa) {
+                                Ok(ok) => ok,
+                                Err(err) => {
+                                    println!("Error! Failed to encrypt! D:");
+                                    println!("{}", err);
+                                    continue;
+                                }
+                            },
+                            recipient: user.id
+                        })
+                    };
                     write!(session, packet, {});
                 },
                 "nick" => {
@@ -928,7 +930,7 @@ fn parse_ip(input: &str) -> Option<SocketAddr> {
     use std::net::ToSocketAddrs;
     match (ip, port).to_socket_addrs() {
         Ok(mut ok) => ok.next(),
-        Err(_) => { println!(":("); None }
+        Err(_) => { None }
     }
 }
 

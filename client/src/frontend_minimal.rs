@@ -107,9 +107,14 @@ impl Screen {
             let mut lines = 0;
             for msg in log {
                 lines += 1;
-                for (i, c) in msg.0.chars().enumerate() {
-                    if (i != 0 && i % cw == 0) || c == '\n' {
+
+                let mut i = 0;
+                for c in msg.0.chars() {
+                    if (i != 0 && i == cw) || c == '\n' {
+                        i = 0;
                         lines += 1;
+                    } else {
+                        i += 1;
                     }
                 }
             }
