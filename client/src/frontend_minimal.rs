@@ -128,19 +128,24 @@ impl Screen {
         write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
 
         for &(ref text, id) in log {
-            let indent_amount = text.chars().position(|c| c == ':').map(|i| i+2).unwrap_or_default();
+            let indent_amount = text.find("):").map(|i| i+3).unwrap_or_default();
+            // That does look a lot like a sad face
+
             let mut first  = true;
             let mut indent = String::new();
+            let mut skip   = 0;
             let mut text   = &**text;
 
             while text.len() > 0 {
                 if !first && indent.is_empty() {
                     indent = " ".repeat(indent_amount);
-                } else {
-                    first = false;
                 }
-                let mut skip = 0;
-                let newline = text.chars().position(|c| c == '\n').map(|i| {skip += 1; i}).unwrap_or(std::usize::MAX);
+                first = false;
+
+                text = &text[skip..];
+                skip = 0;
+
+                let newline = text.find('\n').unwrap_or(std::usize::MAX);
                 let width = cmp::min(newline, cmp::min(cw.saturating_sub(indent_amount), text.len()));
                 if let LogEntryId::Sending = id {
                     writeln!(
@@ -154,7 +159,10 @@ impl Screen {
                 } else {
                     writeln!(stdout, "{}{}", indent, &text[..width]).unwrap();
                 }
-                text = &text[width..].trim_left();
+                text = &text[width..];
+                if width == newline {
+                    skip += 1;
+                }
             }
         }
 

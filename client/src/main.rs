@@ -26,6 +26,7 @@ mod frontend_minimal;
 mod frontend_cursive;
 mod connect;
 mod encrypter;
+mod help;
 mod listener;
 mod parser;
 
@@ -243,21 +244,16 @@ fn main() {
 
             match &*command {
                 "ban" | "unban" => {
-                    usage!(1, "ban/unban <user id>");
+                    usage!(1, "ban/unban <user>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
-                    let id = match args[0].parse() {
-                        Ok(ok) => ok,
-                        Err(_) => {
-                            println!("Failed to parse ID");
+                    let id = match find_user(&session.users, &args[0]) {
+                        Some(user) => user.id,
+                        None => {
+                            println!("No such user");
                             continue;
                         }
                     };
-
-                    if !session.users.contains_key(&id) {
-                        println!("No such user");
-                        continue;
-                    }
 
                     let packet = Packet::UserUpdate(common::UserUpdate {
                         ban: Some(command == "ban"),
@@ -284,7 +280,7 @@ fn main() {
                     *session = connect::connect(addr, &db.lock().unwrap(), &nick, &screen, &ssl);
                 },
                 "create" => {
-                    usage_min!(2, "create <\"group\"/\"channel\"> <name> [data]");
+                    usage_min!(2, "create <\"channel\"/\"group\"> <name> [data]");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let packet = match &*args[0] {
@@ -320,7 +316,7 @@ fn main() {
                     write!(session, packet, { continue; })
                 },
                 "delete" => {
-                    usage!(2, "delete <\"group\"/\"channel\"/\"message\"> <id>");
+                    usage!(2, "delete <\"channel\"/\"group\"/\"message\"> <id>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
@@ -378,8 +374,12 @@ fn main() {
                     };
                     db.lock().unwrap().execute("DELETE FROM servers WHERE ip = ?", &[&addr.to_string()]).unwrap();
                 },
+                "help" => {
+                    let borrowed: Vec<_> = args.iter().map(|arg| &**arg).collect();
+                    help::help(&*borrowed, &screen);
+                },
                 "info" => {
-                    usage!(1, "info <group or channel name>");
+                    usage!(1, "info <channel/group/user>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let mut name = &*args[0];
@@ -432,7 +432,7 @@ fn main() {
                     }
                 },
                 "join" => {
-                    usage!(1, "join <channel name>");
+                    usage!(1, "join <channel>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     let mut name = &*args[0];
@@ -462,7 +462,7 @@ fn main() {
                     }
                 },
                 "list" => {
-                    usage!(1, "list <\"groups\"/\"channels\"/\"users\">");
+                    usage!(1, "list <\"channels\"/\"groups\"/\"users\">");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
                     match &*args[0] {
@@ -609,7 +609,7 @@ fn main() {
                 },
                 "quit" => break,
                 "setupkeys" => {
-                    usage!(1, "setupkeys <user id>");
+                    usage!(1, "setupkeys <user>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
@@ -662,7 +662,7 @@ fn main() {
                     ).unwrap();
                 },
                 "update" => {
-                    usage!(2, "update <\"group\"/\"channel\"> <id>");
+                    usage!(2, "update <\"channel\"/\"group\"> <id>");
 
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
