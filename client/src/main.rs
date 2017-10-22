@@ -145,7 +145,7 @@ fn main() {
 
     macro_rules! write {
         ($session:expr, $packet:expr, $break:block) => {
-            if connect::write(&db.lock().unwrap(), &nick, &$packet, &*screen, $session, &ssl) {
+            if !connect::write(&db.lock().unwrap(), &nick, &$packet, &*screen, $session, &ssl) {
                 $break
             }
         }
@@ -260,7 +260,7 @@ fn main() {
                         groups: None,
                         id: id
                     });
-                    write!(session, packet, { continue; })
+                    write!(session, packet, {})
                 },
                 "connect" => {
                     usage!(1, "connect <ip[:port]>");
@@ -313,7 +313,7 @@ fn main() {
                         },
                         _ => { println!("Unable to create that"); continue; }
                     };
-                    write!(session, packet, { continue; })
+                    write!(session, packet, {})
                 },
                 "delete" => {
                     usage!(2, "delete <\"channel\"/\"group\"/\"message\"> <id>");
@@ -349,7 +349,7 @@ fn main() {
                         }
                     };
                     if let Some(packet) = packet {
-                        write!(session, packet, { continue; })
+                        write!(session, packet, {})
                     } else {
                         println!("Nothing with that ID exists");
                     }
@@ -456,7 +456,7 @@ fn main() {
                         }
                     }
                     if let Some(packet) = packet {
-                        write!(session, packet, { continue; });
+                        write!(session, packet, {});
                     } else {
                         println!("No channel found with that name");
                     }
@@ -562,6 +562,11 @@ fn main() {
                         })
                     };
                     write!(session, packet, {});
+                    println!(
+                        "You privately messaged {}: {}",
+                        args[0],
+                        args[1]
+                    );
                 },
                 "nick" => {
                     usage!(1, "nick <name>");
@@ -761,7 +766,7 @@ fn main() {
                         }
                     };
                     if let Some(packet) = packet {
-                        write!(session, packet, { continue; })
+                        write!(session, packet, {})
                     } else {
                         println!("Nothing with that ID exists");
                     }
@@ -791,7 +796,7 @@ fn main() {
                 recipient: recipient
             });
 
-            write!(session, packet, { continue; });
+            write!(session, packet, {});
 
             continue;
         }
@@ -823,7 +828,7 @@ fn main() {
                 })
             };
 
-            write!(session, packet, { continue; })
+            write!(session, packet, {})
         } else {
             println!("No channel specified. See /create channel, /list channels and /join");
             continue;
