@@ -88,7 +88,7 @@ impl Screen {
             cursive.focus_id("input").unwrap();
 
             while cursive.is_running() {
-                if let Ok(callback) = rx_sink.try_recv() {
+                while let Ok(callback) = rx_sink.try_recv() {
                     callback.call_box((&mut cursive,));
                 }
                 cursive.step();
@@ -213,10 +213,16 @@ impl Screen {
     pub fn get_channel_overrides(&self, overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
         let names: HashMap<_, _> = session.groups.iter()
-            .map(|(id, group)| (*id, group.name.clone())) // Sorry for cloning, but I don't see any other way :(
+            .map(|(id, group)| {
+                let mut name = id.to_string();
+                name.reserve(2 + group.name.len());
+                name.push_str(": ");
+                name.push_str(&group.name);
+                (*id, name)
+            })
             .collect();
 
-        let (tx, rx): (mpsc::Sender<HashMap<usize, (u8, u8)>>, mpsc::Receiver<_>) = mpsc::channel();
+        let (tx, rx) = mpsc::channel::<HashMap<usize, (u8, u8)>>();
 
         self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
             let group_read    = Rc::new(RefCell::new(RadioGroup::new()));
@@ -246,7 +252,7 @@ impl Screen {
                         .child(SelectView::new()
                             .popup()
                             .item_str("Select a role")
-                            .on_submit(move |cursive: &mut Cursive, label: &str| {
+                            .on_submit(move |cursive: &mut _, value: &str| {
                                 if let Some(id) = *last.borrow() {
                                     let bitmask = bitmask_for_buttons(
                                         &group_read_clone.borrow(),
@@ -256,7 +262,7 @@ impl Screen {
                                     overrides_clone.borrow_mut().insert(id, bitmask);
                                 }
 
-                                if let Some(id) = label.split(":").next().and_then(|id| id.parse().ok()) {
+                                if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
                                     // This is the most horrible, hacky, disgusting code I've written this week.
                                     // I tried keeping a map of index -> id, but in the end I failed.
 
@@ -277,13 +283,7 @@ impl Screen {
                         .child(checkbox(&mut group_channel.borrow_mut(), id_touple!("channel"), "Manage this channel")))
                     .button("Add", move |cursive| {
                         cursive.add_layer(Dialog::around(SelectView::new()
-                            .with_all_str(names.iter().map(|(id, name)| {
-                                let mut result = id.to_string();
-                                result.reserve(2 + name.len());
-                                result.push_str(": ");
-                                result.push_str(&name);
-                                result
-                            }))
+                            .with_all_str(names.values().cloned())
                             .on_submit(move |cursive: &mut Cursive, string: &str| {
                                 cursive.pop_layer();
                                 cursive.call_on_id("role", |select: &mut SelectView| {
@@ -310,21 +310,95 @@ impl Screen {
 
             cursive.call_on_id("role", |select: &mut SelectView| {
                 select.add_all_str(overrides.borrow().keys().map(|id| {
-                    let mut result = id.to_string();
                     if let Some(name) = names_clone.get(&id) {
-                        result.reserve(2 + name.len());
-                        result.push_str(": ");
-                        result.push_str(&name);
+                        return name.clone();
                     }
-                    result
+                    id.to_string()
                 }));
             });
         })).unwrap();
 
         Ok(rx.recv().unwrap())
     }
-    pub fn get_user_groups(&self, _: Vec<usize>, _: &Session) -> Result<Vec<usize>, ()> {
-        Err(())
+    pub fn get_user_groups(&self, groups: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
+        let names: HashMap<_, _> = session.groups.iter()
+            .filter(|&(_, group)| group.pos > 0)
+            .map(|(id, group)| {
+                let mut name = id.to_string();
+                name.reserve(2 + group.name.len());
+                name.push_str(": ");
+                name.push_str(&group.name);
+                (*id, name)
+            })
+            .collect();
+
+        let (tx, rx) = mpsc::channel::<Vec<usize>>();
+
+        self.sink.lock().unwrap().send(Box::new(move |cursive: &mut Cursive| {
+            let selected = Rc::new(RefCell::new(groups.clone()));
+            let selected_clone = Rc::clone(&selected);
+            let selected_clone2 = Rc::clone(&selected);
+
+            cursive.add_layer(
+                Dialog::around(LinearLayout::horizontal()
+                    .child(LinearLayout::vertical()
+                        .child(TextView::new("Available"))
+                        .child(
+                            SelectView::new()
+                                .on_submit(move |cursive: &mut Cursive, value: &str| {
+                                    cursive.call_on_id("available", |select: &mut SelectView| {
+                                        let id = select.selected_id().unwrap();
+                                        select.remove_item(id);
+                                    });
+                                    cursive.call_on_id("selected", |select: &mut SelectView| {
+                                        select.add_item_str(value.clone());
+                                    });
+                                    if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
+                                        selected_clone.borrow_mut().push(id);
+                                    }
+                                })
+                                .with_all_str(
+                                    names.iter()
+                                        .filter(|&(id, _)| !groups.contains(&id))
+                                        .map(|(_, name)| name.clone())
+                                )
+                                .with_id("available")
+                        )
+                    )
+                    .child(LinearLayout::vertical()
+                        .child(TextView::new("Selected"))
+                        .child(
+                            SelectView::<String>::new()
+                                .on_submit(move |cursive: &mut Cursive, value: &String| {
+                                    cursive.call_on_id("selected", |select: &mut SelectView| {
+                                        let id = select.selected_id().unwrap();
+                                        select.remove_item(id);
+                                    });
+                                    cursive.call_on_id("available", |select: &mut SelectView| {
+                                        select.add_item_str(value.clone());
+                                    });
+                                    if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
+                                        selected_clone2.borrow_mut().remove_item(&id);
+                                    }
+                                })
+                                .with_all_str(
+                                    groups.iter()
+                                        .map(|id| names.get(&id)
+                                             .map(|name| name.clone())
+                                             .unwrap_or_else(|| String::from("unknown"))
+                                        )
+                                )
+                                .with_id("selected")
+                        )
+                    )
+                )
+                .button("Finish", move |cursive| {
+                    cursive.pop_layer();
+                    tx.send(selected.replace(Vec::new())).unwrap();
+                })
+            );
+        })).unwrap();
+        Ok(rx.recv().unwrap())
     }
 }
 fn checkbox<S: Into<String>>(group: &mut RadioGroup<String>, id: (S, S, S), text: S) -> LinearLayout {

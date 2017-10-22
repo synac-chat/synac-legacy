@@ -209,74 +209,6 @@ impl Screen {
     }
     pub fn update(&self, _: &Session) {}
 
-    pub fn get_user_groups(&self, mut groups: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
-        let _guard = self.mute();
-        let mut log = Vec::with_capacity(2);
-
-        macro_rules! println {
-            ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
-        }
-
-        loop {
-            let result = groups.iter().fold(String::new(), |mut acc, item| {
-                if !acc.is_empty() { acc.push_str(", "); }
-                acc.push_str(&item.to_string());
-                acc
-            });
-            println!("Groups: [{}]", result);
-            println!("Commands: add, remove, quit");
-            self.repaint_(&log);
-
-            let line = self.readline(None)?;
-
-            let parts = parser::parse(&line);
-            if parts.is_empty() { continue; }
-            let add = match &*parts[0] {
-                "add" => true,
-                "remove" => false,
-                "quit" => break,
-                _ => {
-                    println!("Unknown command");
-                    continue;
-                }
-            };
-
-            if parts.len() != 2 {
-                println!("Usage: add/remove <id>");
-                continue;
-            }
-            let id = match parts[1].parse() {
-                Ok(ok) => ok,
-                Err(_) => {
-                    println!("Invalid ID");
-                    continue;
-                }
-            };
-            if let Some(group) = session.groups.get(&id) {
-                if group.pos == 0 {
-                    println!("Unable to assign that group");
-                    continue;
-                }
-                if add {
-                    if !groups.contains(&id) {
-                        groups.push(id);
-                        groups.sort_unstable();
-                    }
-                    println!("Added: {}", group.name);
-                } else {
-                    let pos = groups.iter().position(|item| *item == id);
-                    if let Some(pos) = pos {
-                        groups.remove(pos);
-                    }
-                    // TODO remove_item once stable
-                    println!("Removed: {}", group.name);
-                }
-            } else {
-                println!("Could not find group");
-            }
-        }
-        Ok(groups)
-    }
     pub fn get_channel_overrides(&self, mut overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
         let _guard = self.mute();
@@ -348,5 +280,73 @@ impl Screen {
             }
         }
         Ok(overrides)
+    }
+    pub fn get_user_groups(&self, mut groups: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
+        let _guard = self.mute();
+        let mut log = Vec::with_capacity(2);
+
+        macro_rules! println {
+            ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
+        }
+
+        loop {
+            let result = groups.iter().fold(String::new(), |mut acc, item| {
+                if !acc.is_empty() { acc.push_str(", "); }
+                acc.push_str(&item.to_string());
+                acc
+            });
+            println!("Groups: [{}]", result);
+            println!("Commands: add, remove, quit");
+            self.repaint_(&log);
+
+            let line = self.readline(None)?;
+
+            let parts = parser::parse(&line);
+            if parts.is_empty() { continue; }
+            let add = match &*parts[0] {
+                "add" => true,
+                "remove" => false,
+                "quit" => break,
+                _ => {
+                    println!("Unknown command");
+                    continue;
+                }
+            };
+
+            if parts.len() != 2 {
+                println!("Usage: add/remove <id>");
+                continue;
+            }
+            let id = match parts[1].parse() {
+                Ok(ok) => ok,
+                Err(_) => {
+                    println!("Invalid ID");
+                    continue;
+                }
+            };
+            if let Some(group) = session.groups.get(&id) {
+                if group.pos == 0 {
+                    println!("Unable to assign that group");
+                    continue;
+                }
+                if add {
+                    if !groups.contains(&id) {
+                        groups.push(id);
+                        groups.sort_unstable();
+                    }
+                    println!("Added: {}", group.name);
+                } else {
+                    let pos = groups.iter().position(|item| *item == id);
+                    if let Some(pos) = pos {
+                        groups.remove(pos);
+                    }
+                    // TODO remove_item once stable
+                    println!("Removed: {}", group.name);
+                }
+            } else {
+                println!("Could not find group");
+            }
+        }
+        Ok(groups)
     }
 }
