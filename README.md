@@ -23,7 +23,7 @@ Differences from IRC:
 - Bot accounts should be marked so you can see if somebody is a bot.
 - Channels can only be created with a specific permission.
 - Each account gets a (resettable) token. This token is stored on the client and used to log in with, instead of the password.
-- Message Logs are kept by default.
+- Message logs are kept by default.
 - Most configuration is done from inside the application itself.
 - Nicknames are claimed using a password by default.
 
@@ -34,7 +34,7 @@ Differences from Discord:
 
 - Bot accounts have a separate permission from @everyone, so you can deny bots the ability to read message easier.
 - No terms of service. Do what you want.
-- No voice support or direct messages.
+- No voice support.
 - Open source.
 - PMs are E2E encrypted.
 - Self-hosted. You will have to set up the server yourself (this is good for security.)
