@@ -65,24 +65,20 @@ pub fn connect(
     let mut stream = {
         let mut config = ssl.configure().expect("Failed to configure SSL connector");
         config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
-            match cert.current_cert() {
-                Some(cert) => match cert.public_key() {
-                    Ok(pkey) => match pkey.public_key_to_pem() {
-                        Ok(pem) => {
-                            let digest = openssl::sha::sha256(&pem);
-                            let mut digest_str = String::with_capacity(64);
-                            for byte in &digest {
-                                digest_str.push_str(&format!("{:0X}", byte));
-                            }
-                            use std::ascii::AsciiExt;
-                            public_key.trim().eq_ignore_ascii_case(&digest_str)
-                        },
-                        Err(_) => false
-                    },
-                    Err(_) => false
-                },
-                None => false
+            if let Some(cert) = cert.current_cert() {
+                if let Ok(pkey) = cert.public_key() {
+                    if let Ok(pem) = pkey.public_key_to_pem() {
+                        let digest = openssl::sha::sha256(&pem);
+                        let mut digest_str = String::with_capacity(digest.len());
+                        for byte in &digest {
+                            digest_str.push_str(&format!("{:0X}", byte));
+                        }
+                        use std::ascii::AsciiExt;
+                        return public_key.trim().eq_ignore_ascii_case(&digest_str);
+                    }
+                }
             }
+            false
         });
 
         match
