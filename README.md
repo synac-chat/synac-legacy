@@ -7,6 +7,12 @@ Breaking changes are now less frequent, and you might wanna start developing bot
 Bugs are likely to be found, as I am known to accidentally try to access a channel by a user's ID or such.  
 Not all of the below points are implemented, and they might change around.
 
+If you don't feel like hosting a server or just wanna hang out with other beta testers,
+check out the official testing server:
+
+**IP**: krake.one  
+**Public key hash**: `C9F6251FA5892B3877ACECA523ACFD925CAA7D9FA245D9C50DD083A39F199`
+
 --------------------------------
 
 This is the beginning of a new chat protocol and application.  
