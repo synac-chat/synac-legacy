@@ -128,8 +128,7 @@ impl Screen {
         write!(stdout, "{}{}", termion::clear::All, cursor::Goto(1, 1)).unwrap();
 
         for &(ref text, id) in log {
-            let indent_amount = text.find("):").map(|i| i+3).unwrap_or_default();
-            // That does look a lot like a sad face
+            let indent_amount = text.find(": ").map(|i| i+2).unwrap_or_default();
 
             let mut first  = true;
             let mut indent = String::new();
@@ -137,9 +136,10 @@ impl Screen {
             let mut text   = &**text;
 
             while text.len() > 0 {
-                if !first && indent.is_empty() {
+                let indent_amount = if !first && indent.is_empty() {
                     indent = " ".repeat(indent_amount);
-                }
+                    indent_amount
+                } else { 0 };
                 first = false;
 
                 text = &text[skip..];
