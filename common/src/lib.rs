@@ -290,7 +290,7 @@ pub fn decode_u16(bytes: &[u8]) -> u16 {
 pub enum Error {
     DecodeError(rmps::decode::Error),
     EncodeError(rmps::encode::Error),
-    ErrPacketTooBig,
+    PacketTooBigError,
     IoError(std::io::Error)
 }
 
@@ -299,7 +299,7 @@ impl std::error::Error for Error {
         match *self {
             Error::DecodeError(ref inner) => inner.description(),
             Error::EncodeError(ref inner) => inner.description(),
-            Error::ErrPacketTooBig    => "Packet size must fit into an u16",
+            Error::PacketTooBigError      => "Packet size must fit into an u16",
             Error::IoError(ref inner)     => inner.description()
         }
     }
@@ -310,7 +310,7 @@ impl std::fmt::Display for Error {
         match *self {
             Error::DecodeError(ref inner) => write!(f, "{}", inner),
             Error::EncodeError(ref inner) => write!(f, "{}", inner),
-            Error::ErrPacketTooBig        => write!(f, "{}", self.description()),
+            Error::PacketTooBigError      => write!(f, "{}", self.description()),
             Error::IoError(ref inner)     => write!(f, "{}", inner)
         }
     }
@@ -344,7 +344,7 @@ pub fn read<T: io::Read>(reader: &mut T) -> Result<Packet, Error> {
 pub fn write<T: io::Write>(writer: &mut T, packet: &Packet) -> Result<(), Error> {
     let buf = serialize(packet)?;
     if buf.len() > std::u16::MAX as usize {
-        return Err(Error::ErrPacketTooBig);
+        return Err(Error::PacketTooBigError);
     }
     let size = encode_u16(buf.len() as u16);
     writer.write_all(&size)?;
