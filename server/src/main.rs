@@ -1641,6 +1641,6 @@ fn handle_packet(
                 Reply::None
             }
         },
-        _ => unimplemented!()
+        _ => ()
     }
 }

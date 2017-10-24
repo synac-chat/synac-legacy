@@ -221,6 +221,7 @@ pub struct UserReceive {
     pub inner: User
 }
 
+// TODO: Separate client and server packets!!
 macro_rules! packet {
     ($($type:ident),+) => {
 #[derive(Clone, Debug, Deserialize, Serialize)]
