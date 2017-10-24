@@ -15,6 +15,7 @@ pub fn connect(
     // See https://github.com/rust-lang/rust/issues/35853
     macro_rules! println {
         () => { screen.log(String::new()); };
+        ($arg:expr) => { screen.log(String::from($arg)); };
         ($($arg:expr),*) => { screen.log(format!($($arg),*)); };
     }
     macro_rules! readline {

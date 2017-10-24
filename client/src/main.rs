@@ -76,6 +76,7 @@ fn main() {
     // See https://github.com/rust-lang/rust/issues/35853
     macro_rules! println {
         () => { screen.log(String::new()); };
+        ($arg:expr) => { screen.log(String::from($arg)); };
         ($($arg:expr),*) => { screen.log(format!($($arg),*)); };
     }
     macro_rules! readline {
@@ -129,7 +130,7 @@ fn main() {
             Cow::from(row.unwrap().get::<_, String>(0))
         } else {
             #[cfg(unix)]
-            { env::var("USER").map(|nick| Cow::from(nick)).unwrap_or_else(|_| Cow::from("unknown")) }
+            { env::var("USER").map(Cow::from).unwrap_or_else(|_| Cow::from("unknown")) }
             #[cfg(windows)]
             { env::var("USERNAME").map(|nick| Cow::from(nick)).unwrap_or_else(|_| Cow::from("unknown")) }
             #[cfg(not(any(unix, windows)))]
@@ -478,7 +479,7 @@ fn main() {
                                 acc.push_str(&channel.name);
                                 acc
                             });
-                            println!("{}", result);
+                            println!(result);
                         },
                         "groups" => {
                             // Read the above comment, thank you ---------------------------^
@@ -490,7 +491,7 @@ fn main() {
                                 acc.push_str(&group.name);
                                 acc
                             });
-                            println!("{}", result);
+                            println!(result);
                         },
                         "users" => {
                             // something something above comment
@@ -501,7 +502,7 @@ fn main() {
                                 if *banned {
                                     println!("Banned:");
                                 }
-                                println!("{}", users.iter().fold(String::new(), |mut acc, user| {
+                                println!(users.iter().fold(String::new(), |mut acc, user| {
                                     if user.ban == *banned {
                                         if !acc.is_empty() { acc.push_str(", "); }
                                         acc.push_str(&user.name);
@@ -641,15 +642,14 @@ fn main() {
                     let public  =  rsa.public_key_to_pem().unwrap();
 
                     println!("1. You need to give your recipient this \"public key\":");
-                    println!("{}", String::from_utf8_lossy(&public));
+                    println!(String::from_utf8_lossy(&public));
                     println!("2. Have your recipient run /setupkeys too.");
                     println!("You will be asked to enter his/her public key here.");
                     println!("When you've entered it, type \"END\".");
                     println!("Enter his/her public key here:");
 
                     let mut key = String::with_capacity(512); // idk, just guessing
-                    loop {
-                        let line = readline!({ break; });
+                    while let Ok(line) = screen.readline(None) {
                         if line == "END" { break; }
 
                         key.push_str(&line);
@@ -735,7 +735,7 @@ fn main() {
                             let mut name = name.trim();
                             if name.is_empty() { name = &channel.name }
 
-                            let overrides = match screen.get_channel_overrides(channel.overrides.clone(), &session) {
+                            let overrides = match screen.get_channel_overrides(channel.overrides.clone(), session) {
                                 Ok(ok) => ok,
                                 Err(_) => continue
                             };
@@ -750,7 +750,7 @@ fn main() {
                             }))
                         } else { None },
                         "user" => if let Some(user) = session.users.get(&id) {
-                            let groups = match screen.get_user_groups(user.groups.clone(), &session) {
+                            let groups = match screen.get_user_groups(user.groups.clone(), session) {
                                 Ok(ok) => ok,
                                 Err(_) => continue
                             };
@@ -946,11 +946,11 @@ fn get_typing_string<I, V>(mut people: I, len: usize) -> String
         () => { people.next().unwrap().as_ref() }
     }
     match len {
-        n if n > 500 => format!("(╯°□°）╯︵ ┻━┻"),
-        n if n > 100 => format!("A crap ton of people are typing"),
-        n if n > 50 => format!("Over 50 people are typing"),
-        n if n > 10 => format!("Over 10 people are typing"),
-        n if n > 3 => format!("Several people are typing"),
+        n if n > 500 => String::from("(╯°□°）╯︵ ┻━┻"),
+        n if n > 100 => String::from("A crap ton of people are typing"),
+        n if n > 50 => String::from("Over 50 people are typing"),
+        n if n > 10 => String::from("Over 10 people are typing"),
+        n if n > 3 => String::from("Several people are typing"),
         3 => format!("{}, {} and {} are typing", next!(), next!(), next!()),
         2 => format!("{} and {} are typing", next!(), next!()),
         1 => format!("{} is typing", next!()),

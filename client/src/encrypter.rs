@@ -26,7 +26,7 @@ pub fn encrypt(input: &[u8], rsa: &Rsa) -> Result<Vec<u8>, Box<::std::error::Err
     rand::rand_bytes(&mut key)?;
     rand::rand_bytes(&mut iv)?;
 
-    let mut encrypted_aes = symm::encrypt(Cipher::aes_256_cbc(), &key, Some(&iv), &input)?;
+    let mut encrypted_aes = symm::encrypt(Cipher::aes_256_cbc(), &key, Some(&iv), input)?;
     let size_aes = encrypted_aes.len();
 
     let size_rsa = rsa.size();

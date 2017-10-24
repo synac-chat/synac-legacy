@@ -205,7 +205,7 @@ impl Screen {
                 list.add_child("Channels", DummyView);
                 list.add_delimiter();
                 for name in &*names {
-                    list.add_child(&name, DummyView);
+                    list.add_child(name, DummyView);
                 }
             });
         })).unwrap();
@@ -263,7 +263,7 @@ impl Screen {
                                     overrides_clone.borrow_mut().insert(id, bitmask);
                                 }
 
-                                if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
+                                if let Some(id) = value.split(':').next().and_then(|id| id.parse().ok()) {
                                     // This is the most horrible, hacky, disgusting code I've written this week.
                                     // I tried keeping a map of index -> id, but in the end I failed.
 
@@ -272,7 +272,7 @@ impl Screen {
                                     buttons_for_bitmask(
                                         overrides_clone3.borrow_mut()
                                             .get(&id)
-                                            .map(|item| *item)
+                                            .cloned()
                                             .unwrap_or_default(),
                                         cursive
                                     )
@@ -311,7 +311,7 @@ impl Screen {
 
             cursive.call_on_id("role", |select: &mut SelectView| {
                 select.add_all_str(overrides.borrow().keys().map(|id| {
-                    if let Some(name) = names_clone.get(&id) {
+                    if let Some(name) = names_clone.get(id) {
                         return name.clone();
                     }
                     id.to_string()
@@ -352,15 +352,15 @@ impl Screen {
                                         select.remove_item(id);
                                     });
                                     cursive.call_on_id("selected", |select: &mut SelectView| {
-                                        select.add_item_str(value.clone());
+                                        select.add_item_str(value.to_string());
                                     });
-                                    if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
+                                    if let Some(id) = value.split(':').next().and_then(|id| id.parse().ok()) {
                                         selected_clone.borrow_mut().push(id);
                                     }
                                 })
                                 .with_all_str(
                                     names.iter()
-                                        .filter(|&(id, _)| !groups.contains(&id))
+                                        .filter(|&(id, _)| !groups.contains(id))
                                         .map(|(_, name)| name.clone())
                                 )
                                 .with_id("available")
@@ -378,14 +378,14 @@ impl Screen {
                                     cursive.call_on_id("available", |select: &mut SelectView| {
                                         select.add_item_str(value.clone());
                                     });
-                                    if let Some(id) = value.split(":").next().and_then(|id| id.parse().ok()) {
+                                    if let Some(id) = value.split(':').next().and_then(|id| id.parse().ok()) {
                                         selected_clone2.borrow_mut().remove_item(&id);
                                     }
                                 })
                                 .with_all_str(
                                     groups.iter()
-                                        .map(|id| names.get(&id)
-                                             .map(|name| name.clone())
+                                        .map(|id| names.get(id)
+                                             .cloned()
                                              .unwrap_or_else(|| String::from("unknown"))
                                         )
                                 )

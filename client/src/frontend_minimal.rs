@@ -135,7 +135,7 @@ impl Screen {
             let mut skip   = 0;
             let mut text   = &**text;
 
-            while text.len() > 0 {
+            while !text.is_empty() {
                 let indent_amount = if !first && indent.is_empty() {
                     indent = " ".repeat(indent_amount);
                     indent_amount
@@ -225,10 +225,12 @@ impl Screen {
     pub fn get_channel_overrides(&self, mut overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {
         let _guard = self.mute();
-        let mut log = Vec::with_capacity(2);
+        let log = Vec::with_capacity(2);
 
         macro_rules! println {
-            ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
+            () => { self.log(String::new()); };
+            ($arg:expr) => { self.log(String::from($arg)); };
+            ($($arg:expr),*) => { self.log(format!($($arg),*)); };
         }
 
         loop {
@@ -296,10 +298,12 @@ impl Screen {
     }
     pub fn get_user_groups(&self, mut groups: Vec<usize>, session: &Session) -> Result<Vec<usize>, ()> {
         let _guard = self.mute();
-        let mut log = Vec::with_capacity(2);
+        let log = Vec::with_capacity(2);
 
         macro_rules! println {
-            ($($arg:expr),+) => { log.push((format!($($arg),+), LogEntryId::None)) }
+            () => { self.log(String::new()); };
+            ($arg:expr) => { self.log(String::from($arg)); };
+            ($($arg:expr),*) => { self.log(format!($($arg),*)); };
         }
 
         loop {

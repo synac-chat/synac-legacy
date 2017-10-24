@@ -18,7 +18,8 @@ pub fn listen(
 ) {
     macro_rules! println {
         () => { screen.log(String::new()); };
-        ($($arg:expr),*) => { screen.log(format!($($arg),*)); }
+        ($arg:expr) => { screen.log(String::from($arg)); };
+        ($($arg:expr),*) => { screen.log(format!($($arg),*)); };
     }
 
     let mut typing_last = Instant::now();
@@ -48,7 +49,7 @@ pub fn listen(
                             return None;
                         }
 
-                        session.users.get(&author).map(|ref user| &user.name)
+                        session.users.get(&author).map(|user| &user.name)
                     });
 
                 screen.typing_set(get_typing_string(people, session.typing.len()));

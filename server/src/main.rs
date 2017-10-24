@@ -283,7 +283,7 @@ fn main() {
                 config_clone,
                 my_conn_id,
                 db_clone,
-                handle_clone,
+                &handle_clone,
                 addr.ip(),
                 ips_clone,
                 reader,
@@ -327,7 +327,7 @@ fn calculate_permissions(
 
     if let Some(chan_overrides) = chan_overrides {
         for (role, chan_perms) in chan_overrides {
-            if *role <= RESERVED_ROLES || groups.contains(&role) {
+            if *role <= RESERVED_ROLES || groups.contains(role) {
                 common::perm_apply(&mut perms, *chan_perms);
             }
         }
@@ -538,9 +538,9 @@ fn write_broadcast(
     sessions.retain(|i, s| {
         if let Some(id) = s.id {
             // Check if the user really has permission to read this message.
-            if let Some(ref overrides) = channel_overrides {
+            if let Some(overrides) = channel_overrides {
                 if !has_perm(
-                    &config,
+                    config,
                     id,
                     calculate_permissions_by_user(db, id, Some(overrides)).unwrap(),
                     common::PERM_READ
@@ -615,7 +615,7 @@ fn handle_client(
         config:   Rc<Config>,
         conn_id:  usize,
         db:       Rc<SqlConnection>,
-        handle:   Rc<Handle>,
+        handle:   &Rc<Handle>,
         ip:       IpAddr,
         ips:      Rc<RefCell<HashMap<IpAddr, u32>>>,
         reader:   BufReader<tokio_io::io::ReadHalf<SslStream<TcpStream>>>,
@@ -630,7 +630,7 @@ fn handle_client(
         }
     }
 
-    let handle_clone = Rc::clone(&handle);
+    let handle_clone = Rc::clone(handle);
     let length = io::read_exact(reader, [0; 2])
         .map_err(|_| ())
         .and_then(move |(reader, bytes)| {
@@ -750,7 +750,7 @@ fn handle_client(
                         config,
                         conn_id,
                         db,
-                        handle_clone_clone_ugh,
+                        &handle_clone_clone_ugh,
                         ip,
                         ips,
                         reader,
@@ -796,7 +796,7 @@ fn handle_packet(
             let mut stop = false;
             {
                 let user = &mut users.entry($id).or_insert_with(UserSession::new);
-                if let Some(left) = check_rate_limits(&config, $expensive, user) {
+                if let Some(left) = check_rate_limits(config, $expensive, user) {
                     let session = &mut sessions.get_mut(&conn_id).unwrap();
                     write(&mut session.writer, Packet::RateLimited(left));
                     stop = true;
@@ -828,7 +828,7 @@ fn handle_packet(
                 return Reply::Reply(Packet::Err(common::ERR_LIMIT_REACHED));
             }
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, None).unwrap(),
                 common::PERM_MANAGE_CHANNELS
@@ -858,7 +858,7 @@ fn handle_packet(
             let channel = unwrap_or_err!(get_channel(db, event.id), common::ERR_UNKNOWN_CHANNEL);
 
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_MANAGE_CHANNELS
@@ -892,7 +892,7 @@ fn handle_packet(
             let old = unwrap_or_err!(get_channel(db, channel.id), common::ERR_UNKNOWN_CHANNEL);
 
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&old.overrides)).unwrap(),
                 common::PERM_MANAGE_CHANNELS
@@ -948,7 +948,7 @@ fn handle_packet(
                 return Reply::Reply(Packet::Err(common::ERR_LIMIT_REACHED));
             }
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, None).unwrap(),
                 common::PERM_MANAGE_GROUPS
@@ -996,7 +996,7 @@ fn handle_packet(
             rate_limit!(id, cheap);
 
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, None).unwrap(),
                 common::PERM_MANAGE_GROUPS
@@ -1042,7 +1042,7 @@ fn handle_packet(
                 return Reply::Reply(Packet::Err(common::ERR_LIMIT_REACHED));
             }
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, None).unwrap(),
                 common::PERM_MANAGE_GROUPS
@@ -1279,7 +1279,7 @@ fn handle_packet(
             let timestamp = Utc::now().timestamp();
 
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_WRITE
@@ -1312,7 +1312,7 @@ fn handle_packet(
             let channel = get_channel(db, msg.channel).unwrap();
 
             if msg.author != id && !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_MANAGE_MESSAGES
@@ -1340,7 +1340,7 @@ fn handle_packet(
             let channel = unwrap_or_err!(get_channel(db, event.channel), common::ERR_UNKNOWN_CHANNEL);
 
             let has = has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_MANAGE_MESSAGES
@@ -1381,7 +1381,7 @@ fn handle_packet(
                 });
                 write_broadcast(
                     Some(&channel.overrides),
-                    &config,
+                    config,
                     db,
                     &packet,
                     None,
@@ -1399,7 +1399,7 @@ fn handle_packet(
                 return Reply::Reply(Packet::Err(common::ERR_LIMIT_REACHED));
             }
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_READ
@@ -1518,7 +1518,7 @@ fn handle_packet(
             let id = get_id!();
             let channel = unwrap_or_err!(get_channel(db, event.channel), common::ERR_UNKNOWN_CHANNEL);
             if !has_perm(
-                &config,
+                config,
                 id,
                 calculate_permissions_by_user(db, id, Some(&channel.overrides)).unwrap(),
                 common::PERM_WRITE
@@ -1541,7 +1541,7 @@ fn handle_packet(
                 if event.id == id
                     || event.id == config.owner_id
                     || !has_perm(
-                    &config,
+                    config,
                     id,
                     calculate_permissions(db, user.bot, &user.groups, None),
                     common::PERM_BAN
@@ -1566,7 +1566,7 @@ fn handle_packet(
                 }))
             } else if let Some(mut groups) = event.groups {
                 if !has_perm(
-                    &config,
+                    config,
                     id,
                     calculate_permissions(db, user.bot, &user.groups, None),
                     common::PERM_ASSIGN_GROUPS
@@ -1590,7 +1590,7 @@ fn handle_packet(
                 }
 
                 let correct = if has_perm(
-                    &config,
+                    config,
                     id,
                     calculate_permissions(db, user.bot, &user.groups, None),
                     common::PERM_MANAGE_GROUPS
