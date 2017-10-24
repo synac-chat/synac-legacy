@@ -214,7 +214,7 @@ pub fn listen(
                                         },
                                         packet => {
                                             println!("Unimplemented packet: {:?}", packet);
-                                        },
+                                        }
                                     }
                                     screen.update(session);
                                 },
