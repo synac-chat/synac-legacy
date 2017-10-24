@@ -77,9 +77,9 @@ pub fn listen(
                                             session.channels.insert(event.inner.id, event.inner);
                                         },
                                         Packet::GroupDeleteReceive(event) => {
-                                            for attr in session.groups.values_mut() {
-                                                if attr.pos > event.inner.pos {
-                                                    attr.pos -= 1;
+                                            for group in session.groups.values_mut() {
+                                                if group.pos > event.inner.pos {
+                                                    group.pos -= 1;
                                                 }
                                             }
                                             session.groups.remove(&event.inner.id);
@@ -91,22 +91,22 @@ pub fn listen(
                                                 } else { None };
                                                 if let Some(pos) = pos {
                                                     if event.inner.pos > pos {
-                                                        for attr in session.groups.values_mut() {
-                                                            if attr.pos > pos && attr.pos <= event.inner.pos {
-                                                                attr.pos -= 1;
+                                                        for group in session.groups.values_mut() {
+                                                            if group.pos > pos && group.pos <= event.inner.pos {
+                                                                group.pos -= 1;
                                                             }
                                                         }
                                                     } else if event.inner.pos < pos {
-                                                        for attr in session.groups.values_mut() {
-                                                            if attr.pos >= event.inner.pos && attr.pos < pos {
-                                                                attr.pos += 1;
+                                                        for group in session.groups.values_mut() {
+                                                            if group.pos >= event.inner.pos && group.pos < pos {
+                                                                group.pos += 1;
                                                             }
                                                         }
                                                     }
                                                 } else {
-                                                    for attr in session.groups.values_mut() {
-                                                        if attr.pos >= event.inner.pos {
-                                                            attr.pos += 1;
+                                                    for group in session.groups.values_mut() {
+                                                        if group.pos >= event.inner.pos {
+                                                            group.pos += 1;
                                                         }
                                                     }
                                                 }
@@ -189,10 +189,10 @@ pub fn listen(
                                         Packet::UserReceive(event) => {
                                             session.users.insert(event.inner.id, event.inner);
                                         },
-                                        Packet::Err(common::ERR_ATTR_INVALID_POS) => {
+                                        Packet::Err(common::ERR_GROUP_INVALID_POS) => {
                                             println!("Invalid group position");
                                         },
-                                        Packet::Err(common::ERR_ATTR_LOCKED_NAME) => {
+                                        Packet::Err(common::ERR_GROUP_LOCKED_NAME) => {
                                             println!("Can not change the name of that group");
                                         },
                                         Packet::Err(common::ERR_LIMIT_REACHED) => {

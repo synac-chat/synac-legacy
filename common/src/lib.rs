@@ -9,14 +9,14 @@ pub const TYPING_TIMEOUT: u8 = 10;
 
 pub const LIMIT_USER_NAME:    usize = 128;
 pub const LIMIT_CHANNEL_NAME: usize = 128;
-pub const LIMIT_ATTR_NAME:    usize = 128;
-pub const LIMIT_ATTR_AMOUNT:  usize = 2048;
+pub const LIMIT_GROUP_NAME:   usize = 128;
+pub const LIMIT_GROUP_AMOUNT: usize = 2048;
 pub const LIMIT_MESSAGE:      usize = 16384;
 
 pub const LIMIT_BULK:         usize = 64;
 
-pub const ERR_ATTR_INVALID_POS:   u8 = 1;
-pub const ERR_ATTR_LOCKED_NAME:   u8 = 2;
+pub const ERR_GROUP_INVALID_POS:   u8 = 1;
+pub const ERR_GROUP_LOCKED_NAME:   u8 = 2;
 pub const ERR_LIMIT_REACHED:      u8 = 3;
 pub const ERR_LOGIN_BANNED:       u8 = 4;
 pub const ERR_LOGIN_BOT:          u8 = 5;

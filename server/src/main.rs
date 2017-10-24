@@ -192,8 +192,8 @@ fn main() {
             }
             if is_invalid!(limit_user_name_min, limit_user_name_max, common::LIMIT_USER_NAME)
                 || is_invalid!(limit_channel_name_min, limit_channel_name_max, common::LIMIT_CHANNEL_NAME)
-                || is_invalid!(limit_group_name_min, limit_group_name_max, common::LIMIT_ATTR_NAME)
-                || config.limit_group_amount_max > common::LIMIT_ATTR_AMOUNT
+                || is_invalid!(limit_group_name_min, limit_group_name_max, common::LIMIT_GROUP_NAME)
+                || config.limit_group_amount_max > common::LIMIT_GROUP_AMOUNT
                 || is_invalid!(limit_message_min, limit_message_max, common::LIMIT_MESSAGE) {
 
                 eprintln!("Your config is exceeding a hard limit");
@@ -965,7 +965,7 @@ fn handle_packet(
                 return Reply::Reply(Packet::Err(common::ERR_LIMIT_REACHED));
             }
             if group.pos == 0 || group.pos > max as usize + 1 {
-                return Reply::Reply(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                return Reply::Reply(Packet::Err(common::ERR_GROUP_INVALID_POS));
             }
 
             db.execute(
@@ -1005,7 +1005,7 @@ fn handle_packet(
             }
             let group = unwrap_or_err!(get_group(db, event.id), common::ERR_UNKNOWN_GROUP);
             if group.pos == 0 {
-                return Reply::Reply(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                return Reply::Reply(Packet::Err(common::ERR_GROUP_INVALID_POS));
             }
 
             db.execute(
@@ -1058,10 +1058,10 @@ fn handle_packet(
             ).unwrap();
 
             if (group.pos == 0 && old.pos != 0) || group.pos > max as usize {
-                return Reply::Reply(Packet::Err(common::ERR_ATTR_INVALID_POS));
+                return Reply::Reply(Packet::Err(common::ERR_GROUP_INVALID_POS));
             }
             if group.pos == 0 && group.name != old.name {
-                return Reply::Reply(Packet::Err(common::ERR_ATTR_LOCKED_NAME));
+                return Reply::Reply(Packet::Err(common::ERR_GROUP_LOCKED_NAME));
             }
             if group.pos > old.pos {
                 db.execute(
