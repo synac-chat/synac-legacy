@@ -224,7 +224,7 @@ pub struct UserReceive {
 macro_rules! packet {
     ($($type:ident),+) => {
         #[derive(Clone, Debug, Deserialize, Serialize)]
-        #[serde(/*tag = "type",*/ rename_all = "snake_case")]
+        #[serde(rename_all = "snake_case")]
         pub enum Packet {
             Close,
             Err(u8),
@@ -233,7 +233,7 @@ macro_rules! packet {
         }
     }
 }
-packet! {
+packet! (
     ChannelCreate,
     ChannelDelete,
     ChannelUpdate,
@@ -263,7 +263,7 @@ packet! {
     PMReceive,
     TypingReceive,
     UserReceive
-}
+);
 
 pub fn serialize(packet: &Packet) -> Result<Vec<u8>, rmps::encode::Error> {
     rmps::to_vec(&packet)
