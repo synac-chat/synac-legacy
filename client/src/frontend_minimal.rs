@@ -135,6 +135,9 @@ impl Screen {
             let mut skip   = 0;
             let mut text   = &**text;
 
+            if text.is_empty() {
+                writeln!(stdout).unwrap();
+            }
             while !text.is_empty() {
                 let indent_amount = if !first && indent.is_empty() {
                     indent = " ".repeat(indent_amount);
