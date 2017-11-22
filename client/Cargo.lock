@@ -1,6 +1,6 @@
 [root]
 name = "client"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "common 0.1.0",
  "cursive 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
