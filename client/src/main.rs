@@ -9,14 +9,13 @@ extern crate rustyline;
 extern crate common;
 
 use common::Packet;
-use openssl::ssl::{SslConnectorBuilder, SslMethod, SslStream};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslStream};
 use rusqlite::Connection as SqlConnection;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -42,6 +41,11 @@ pub enum LogEntryId {
     Sending
 }
 
+pub struct Connector {
+    db:   Arc<Mutex<SqlConnection>>,
+    nick: RwLock<String>,
+    ssl:  SslConnector
+}
 pub struct Session {
     addr: SocketAddr,
     channel: Option<usize>,
@@ -122,19 +126,19 @@ fn main() {
                 )", &[])
         .expect("Couldn't create SQLite table");
 
-    let mut nick = {
+    let nick = {
         let mut stmt = db.prepare("SELECT value FROM data WHERE key = 'nick'").unwrap();
         let mut rows = stmt.query(&[]).unwrap();
 
         if let Some(row) = rows.next() {
-            Cow::from(row.unwrap().get::<_, String>(0))
+            row.unwrap().get::<_, String>(0)
         } else {
             #[cfg(unix)]
-            { env::var("USER").map(Cow::from).unwrap_or_else(|_| Cow::from("unknown")) }
+            { env::var("USER").unwrap_or_else(|_| String::from("unknown")) }
             #[cfg(windows)]
-            { env::var("USERNAME").map(|nick| Cow::from(nick)).unwrap_or_else(|_| Cow::from("unknown")) }
+            { env::var("USERNAME").unwrap_or_else(|_| String::from("unknown")) }
             #[cfg(not(any(unix, windows)))]
-            { Cow::from("unknown") }
+            { String::from("unknown") }
         }
     };
 
@@ -144,14 +148,6 @@ fn main() {
         .expect("Failed to create SSL connector D:")
         .build();
 
-    macro_rules! write {
-        ($session:expr, $packet:expr, $break:block) => {
-            if !connect::write(&db.lock().unwrap(), &nick, &$packet, &*screen, $session, &ssl) {
-                $break
-            }
-        }
-    }
-
     println!("Welcome, {}", nick);
     println!("To quit, type /quit");
     println!("To change your name, type");
@@ -159,6 +155,20 @@ fn main() {
     println!("To connect to a server, type");
     println!("/connect <ip>");
     println!();
+
+    let connector = Arc::new(Connector {
+        db: Arc::clone(&db),
+        nick: RwLock::new(nick),
+        ssl: ssl
+    });
+
+    macro_rules! write {
+        ($session:expr, $packet:expr, $break:block) => {
+            if !connect::write(&connector, &$packet, &*screen, $session) {
+                $break
+            }
+        }
+    }
 
     let (tx_sent, rx_sent) = mpsc::sync_channel(0);
     let (tx_stop, rx_stop) = mpsc::channel();
@@ -278,7 +288,7 @@ fn main() {
                             continue;
                         }
                     };
-                    *session = connect::connect(addr, &db.lock().unwrap(), &nick, &screen, &ssl);
+                    *session = connect::connect(addr, &connector, &screen);
                 },
                 "create" => {
                     usage_min!(2, "create <\"channel\"/\"group\"> <name> [data]");
@@ -590,7 +600,7 @@ fn main() {
                     }
 
                     println!("Your name is now {}", new);
-                    nick = Cow::from(new);
+                    *connector.nick.write().unwrap() = new;
                 },
                 "passwd" => {
                     usage!(0, "passwd");
@@ -821,7 +831,7 @@ fn main() {
                     text: String::from_utf8_lossy(&last.1).replace(find, replace).into_bytes()
                 })
             } else {
-                screen.log_with_id(format!("{}: {}", nick, input), LogEntryId::Sending);
+                screen.log_with_id(format!("{}: {}", connector.nick.read().unwrap(), input), LogEntryId::Sending);
                 Packet::MessageCreate(common::MessageCreate {
                     channel: channel,
                     text: input.into_bytes()

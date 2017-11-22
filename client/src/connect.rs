@@ -1,16 +1,13 @@
 use *;
 use common::Packet;
-use openssl::ssl::{SslConnector, SSL_VERIFY_PEER};
-use rusqlite::Connection as SqlConnection;
+use openssl::ssl::SSL_VERIFY_PEER;
 
 use frontend;
 
 pub fn connect(
     addr: SocketAddr,
-    db: &SqlConnection,
-    nick: &str,
-    screen: &frontend::Screen,
-    ssl: &SslConnector
+    connector: &Connector,
+    screen: &frontend::Screen
 ) -> Option<Session> {
     // See https://github.com/rust-lang/rust/issues/35853
     macro_rules! println {
@@ -34,6 +31,9 @@ pub fn connect(
             }
         }
     }
+
+    let db = connector.db.lock().unwrap();
+    let nick = connector.nick.read().unwrap();
 
     let mut stmt = db.prepare("SELECT key, token FROM servers WHERE ip = ?").unwrap();
     let mut rows = stmt.query(&[&addr.to_string()]).unwrap();
@@ -64,7 +64,7 @@ pub fn connect(
         }
     };
     let mut stream = {
-        let mut config = ssl.configure().expect("Failed to configure SSL connector");
+        let mut config = connector.ssl.configure().expect("Failed to configure SSL connector");
         config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
             if let Some(cert) = cert.current_cert() {
                 if let Ok(pkey) = cert.public_key() {
@@ -223,34 +223,30 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
 }
 
 pub fn reconnect(
+    connector: &Connector,
     err: &std::io::Error,
-    db: &SqlConnection,
-    nick: &str,
     screen: &frontend::Screen,
-    session: &mut Session,
-    ssl: &SslConnector
+    session: &mut Session
 ) {
     if err.kind() == std::io::ErrorKind::BrokenPipe {
         screen.log(String::from("Attempting reconnect..."));
-        if let Some(new) = connect(session.addr, db, nick, screen, ssl) {
+        if let Some(new) = connect(session.addr, &connector, screen) {
             *session = new;
         }
     }
 }
 
 pub fn write(
-    db: &SqlConnection,
-    nick: &str,
+    connector: &Connector,
     packet: &Packet,
     screen: &frontend::Screen,
-    session: &mut Session,
-    ssl: &SslConnector
+    session: &mut Session
 ) -> bool {
     if let Err(err) = common::write(&mut session.stream, packet) {
         screen.log(String::from("Sending failed."));
         screen.log(format!("{}", err));
         if let common::Error::IoError(err) = err {
-            reconnect(&err, db, nick, screen, session, ssl);
+            reconnect(&connector, &err, screen, session);
         }
         return false;
     }
