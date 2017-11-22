@@ -2,6 +2,9 @@
 
 ## Open Beta
 
+**WARNING:** The client code currently sucks for anything other than the minimal front-end.  
+I should rewrite it in a more async manner.
+
 After a lot of work in a closed alpha, the first beta version is ready.  
 Breaking changes are now less frequent, and you might wanna start developing bots or front-ends.  
 Bugs are likely to be found, as I am known to accidentally try to access a channel by a user's ID or such.  
