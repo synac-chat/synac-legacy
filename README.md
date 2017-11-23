@@ -28,13 +28,13 @@ Let's compare!
 I just tried and already love IRC, but it's too complicated to set up and configure for somebody like me.  
 Differences from IRC:
 
-- /msg:s are E2E encrypted.
 - Bot accounts should be marked so you can see if somebody is a bot.
 - Channels can only be created with a specific permission.
 - Each account gets a (resettable) token. This token is stored on the client and used to log in with, instead of the password.
 - Message logs are kept by default.
 - Most configuration is done from inside the application itself.
 - Nicknames are claimed using a password by default.
+- Private messages are end-to-end encrypted
 
 ## Why not Discord?
 
@@ -45,7 +45,7 @@ Differences from Discord:
 - No terms of service. Do what you want.
 - No voice support.
 - Open source.
-- PMs are E2E encrypted.
+- Private messages are end-to-end encrypted
 - Self-hosted. You will have to set up the server yourself (this is good for security.)
 - You can not only allow, but also deny a permission. Meaning you won't struggle with trying to make a "muted" role.
 
