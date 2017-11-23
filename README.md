@@ -14,7 +14,7 @@ If you don't feel like hosting a server or just wanna hang out with other beta t
 check out the official testing server:
 
 **IP**: krake.one  
-**Public key hash**: `C9F6251FA5892B3877ACECA523ACFD925CAA7D9FA245D9C50DD083A39F199`
+**Public key hash**: `C9F6251FA50892B3877ACECA523ACFD925CAA7D9FA245D9C50DD00083A39F199`
 
 --------------------------------
 
