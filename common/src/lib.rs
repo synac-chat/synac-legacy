@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io;
 
 pub const DEFAULT_PORT: u16  = 8439;
+pub const RSA_LENGTH: u32    = 3072;
 pub const TYPING_TIMEOUT: u8 = 10;
 
 pub const LIMIT_USER_NAME:    usize = 128;

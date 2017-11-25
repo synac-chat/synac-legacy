@@ -640,7 +640,7 @@ fn main() {
 
                     println!("In order to secure your connection, we need two things:");
                     use openssl::rsa::Rsa;
-                    let rsa = match Rsa::generate(3072) {
+                    let rsa = match Rsa::generate(common::RSA_LENGTH) {
                         Ok(ok) => ok,
                         Err(err) => {
                             println!("Error! Failed to generate a key pair.");
