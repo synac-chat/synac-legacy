@@ -20,7 +20,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "common 0.1.0",
  "openssl 0.9.20 (registry+https://github.com/rust-lang/crates.io-index)",

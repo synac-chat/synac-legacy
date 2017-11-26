@@ -8,7 +8,9 @@ use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslStream};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -87,11 +89,31 @@ fn main() {
         }
     }
 
-    let db = match SqlConnection::open("data.sqlite") {
+    #[cfg(unix)]
+    let path = env::var("XDG_CONFIG_HOME").ok().map(|item| PathBuf::from(item)).or_else(|| {
+        env::home_dir().map(|mut home| {
+            home.push(".config");
+            home
+        })
+    }).map(|mut path| {
+        path.push("synac");
+        path
+    });
+    #[cfg(not(unix))]
+    let path = None;
+
+    let mut path = path.unwrap_or_else(|| PathBuf::new());
+    if let Err(err) = fs::create_dir_all(&path) {
+        eprintln!("Failed to create all directories");
+        eprintln!("{}", err);
+        return;
+    }
+    path.push("data.sqlite");
+    let db = match SqlConnection::open(&path) {
         Ok(ok) => ok,
         Err(err) => {
-            println!("Failed to open database");
-            println!("{}", err);
+            eprintln!("Failed to open database");
+            eprintln!("{}", err);
             return;
         }
     };

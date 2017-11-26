@@ -42,6 +42,7 @@ impl Screen {
         stdin.lock();
         let stdout = io::stdout();
         stdout.lock();
+
         Screen {
             editor: Mutex::new(rustyline::Editor::<()>::new()),
             log:    RwLock::new(Vec::new()),
