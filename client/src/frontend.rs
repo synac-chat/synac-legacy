@@ -179,7 +179,7 @@ impl Screen {
         MuteGuard(self)
     }
 
-    pub fn readline(&self, _: Option<Box<FnMut(&str) + Send>>) -> Result<String, ()> {
+    pub fn readline(&self) -> Result<String, ()> {
         let mut error = None;
         let ret = {
             let mut editor = self.editor.lock().unwrap();
@@ -249,7 +249,7 @@ impl Screen {
             println!("Commands: set, unset, quit");
             self.repaint_(&log);
 
-            let line = self.readline(None)?;
+            let line = self.readline()?;
 
             let parts = parser::parse(&line);
             if parts.is_empty() { continue; }
@@ -277,7 +277,7 @@ impl Screen {
                     continue;
                 }
             };
-            if let Some(group) = session.groups.get(&id) {
+            if let Some(group) = session.state.groups.get(&id) {
                 if set {
                     let (mut allow, mut deny) = (0, 0);
                     if let Some(perms) = overrides.get(&id) {
@@ -320,7 +320,7 @@ impl Screen {
             println!("Commands: add, remove, quit");
             self.repaint_(&log);
 
-            let line = self.readline(None)?;
+            let line = self.readline()?;
 
             let parts = parser::parse(&line);
             if parts.is_empty() { continue; }
@@ -345,7 +345,7 @@ impl Screen {
                     continue;
                 }
             };
-            if let Some(group) = session.groups.get(&id) {
+            if let Some(group) = session.state.groups.get(&id) {
                 if group.pos == 0 {
                     println!("Unable to assign that group");
                     continue;

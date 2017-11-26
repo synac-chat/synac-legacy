@@ -1,24 +1,23 @@
 extern crate openssl;
 extern crate rusqlite;
 extern crate rustyline;
-extern crate common;
+extern crate synac;
 
-use common::Packet;
-use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslStream};
+use synac::State;
+use synac::common::{self, Packet};
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod frontend;
 mod connect;
-mod encrypter;
+mod frontend;
 mod help;
 mod listener;
 mod parser;
@@ -33,31 +32,28 @@ pub enum LogEntryId {
 pub struct Connector {
     db:   Arc<Mutex<SqlConnection>>,
     nick: RwLock<String>,
-    ssl:  SslConnector
 }
 pub struct Session {
+    inner: synac::Session,
+    state: synac::State,
+
     addr: SocketAddr,
     channel: Option<usize>,
-    channels: HashMap<usize, common::Channel>,
-    groups: HashMap<usize, common::Group>,
     id: usize,
     last: Option<(usize, Vec<u8>)>,
-    stream: SslStream<TcpStream>,
-    typing: HashMap<(usize, usize), Instant>,
-    users: HashMap<usize, common::User>
+    typing: HashMap<(usize, usize), Instant>
 }
 impl Session {
-    pub fn new(addr: SocketAddr, id: usize, stream: SslStream<TcpStream>) -> Session {
+    pub fn new(addr: SocketAddr, id: usize, inner: synac::Session) -> Session {
         Session {
+            inner: inner,
+            state: State::new(),
+
             addr: addr,
             channel: None,
-            channels: HashMap::new(),
-            groups: HashMap::new(),
             id: id,
             last: None,
-            stream: stream,
             typing: HashMap::new(),
-            users: HashMap::new()
         }
     }
 }
@@ -74,7 +70,7 @@ fn main() {
     }
     macro_rules! readline {
         ($break:block) => {
-            match screen.readline(None) {
+            match screen.readline() {
                 Ok(ok) => ok,
                 Err(_) => $break
             }
@@ -153,10 +149,6 @@ fn main() {
 
     let db = Arc::new(Mutex::new(db));
 
-    let ssl = SslConnectorBuilder::new(SslMethod::tls())
-        .expect("Failed to create SSL connector D:")
-        .build();
-
     println!("Welcome, {}", nick);
     println!("To quit, type /quit");
     println!("To change your name, type");
@@ -167,8 +159,7 @@ fn main() {
 
     let connector = Arc::new(Connector {
         db: Arc::clone(&db),
-        nick: RwLock::new(nick),
-        ssl: ssl
+        nick: RwLock::new(nick)
     });
 
     macro_rules! write {
@@ -192,27 +183,7 @@ fn main() {
     let mut editor = rustyline::Editor::<()>::new();
     loop {
         screen.repaint();
-        let input = {
-            let session_clone = Arc::clone(&session);
-            let mut last: Option<Instant> = None;
-            let timeout = Duration::from_secs(common::TYPING_TIMEOUT as u64 / 2);
-            match screen.readline(Some(Box::new(move |_| {
-                if let Some(ref mut session) = *session_clone.lock().unwrap() {
-                    if let Some(channel) = session.channel {
-                        if last.is_none() || last.unwrap().elapsed() >= timeout {
-                            let packet = Packet::Typing(common::Typing {
-                                channel: channel
-                            });
-                            let _ = common::write(&mut session.stream, &packet);
-                            last = Some(Instant::now());
-                        }
-                    }
-                }
-            }))) {
-                Ok(ok) => ok,
-                Err(_) => break
-            }
-        };
+        let input = readline!({ break; });
         if input.is_empty() {
             continue;
         }
@@ -267,7 +238,7 @@ fn main() {
                     usage!(1, "ban/unban <user>");
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
-                    let id = match find_user(&session.users, &args[0]) {
+                    let id = match find_user(&session.state.users, &args[0]) {
                         Some(user) => user.id,
                         None => {
                             println!("No such user");
@@ -322,7 +293,7 @@ fn main() {
                                 println!("Invalid permission string");
                                 continue;
                             }
-                            let max = session.groups.values().max_by_key(|item| item.pos);
+                            let max = session.state.groups.values().max_by_key(|item| item.pos);
                             Packet::GroupCreate(common::GroupCreate {
                                 allow: allow,
                                 deny: deny,
@@ -349,12 +320,12 @@ fn main() {
                     };
 
                     let packet = match &*args[0] {
-                        "group" => if session.groups.contains_key(&id) {
+                        "group" => if session.state.groups.contains_key(&id) {
                             Some(Packet::GroupDelete(common::GroupDelete {
                                 id: id
                             }))
                         } else { None },
-                        "channel" => if session.channels.contains_key(&id) {
+                        "channel" => if session.state.channels.contains_key(&id) {
                             Some(Packet::ChannelDelete(common::ChannelDelete {
                                 id: id
                             }))
@@ -379,7 +350,7 @@ fn main() {
                     let mut session = session.lock().unwrap();
                     {
                         let session = require_session!(session);
-                        let _ = common::write(&mut session.stream, &Packet::Close);
+                        let _ = session.inner.send(&Packet::Close);
                     }
                     *session = None;
                 },
@@ -410,7 +381,7 @@ fn main() {
                     let id = name.parse();
 
                     println!();
-                    for channel in session.channels.values() {
+                    for channel in session.state.channels.values() {
                         if name == channel.name
                             || (name.starts_with('#') && name[1..] == channel.name)
                             || Ok(channel.id) == id {
@@ -421,7 +392,7 @@ fn main() {
                             }
                         }
                     }
-                    for group in session.groups.values() {
+                    for group in session.state.groups.values() {
                         if name == group.name || Ok(group.id) == id {
                             println!("Group {}", group.name);
                             println!("Permission: {}", to_perm_string(group.allow, group.deny));
@@ -429,7 +400,7 @@ fn main() {
                             println!("Position: {}", group.pos);
                         }
                     }
-                    for user in session.users.values() {
+                    for user in session.state.users.values() {
                         if name == user.name || Ok(user.id) == id {
                             println!("User {}", user.name);
                             println!(
@@ -461,7 +432,7 @@ fn main() {
                     }
 
                     let mut packet = None;
-                    for channel in session.channels.values() {
+                    for channel in session.state.channels.values() {
                         if channel.name == name {
                             session.channel = Some(channel.id);
                             screen.clear();
@@ -489,7 +460,7 @@ fn main() {
                         "channels" => {
                             // Yeah, cloning this is bad... But what can I do? I need to sort!
                             // Though, I suspect this might be a shallow copy.
-                            let mut channels: Vec<_> = session.channels.values().collect();
+                            let mut channels: Vec<_> = session.state.channels.values().collect();
                             channels.sort_by_key(|item| &item.name);
 
                             let result = channels.iter().fold(String::new(), |mut acc, channel| {
@@ -502,7 +473,7 @@ fn main() {
                         },
                         "groups" => {
                             // Read the above comment, thank you ---------------------------^
-                            let mut groups: Vec<_> = session.groups.values().collect();
+                            let mut groups: Vec<_> = session.state.groups.values().collect();
                             groups.sort_by_key(|item| &item.pos);
 
                             let result = groups.iter().fold(String::new(), |mut acc, group| {
@@ -514,7 +485,7 @@ fn main() {
                         },
                         "users" => {
                             // something something above comment
-                            let mut users: Vec<_> = session.users.values().collect();
+                            let mut users: Vec<_> = session.state.users.values().collect();
                             users.sort_by_key(|item| &item.name);
 
                             for banned in &[false, true] {
@@ -539,7 +510,7 @@ fn main() {
                     let session = require_session!(session);
 
                     let packet = {
-                        let user = match find_user(&session.users, &args[0]) {
+                        let user = match find_user(&session.state.users, &args[0]) {
                             Some(user) => user,
                             None => {
                                 println!("No such user");
@@ -570,7 +541,7 @@ fn main() {
                             }
                         };
                         Packet::PrivateMessage(common::PrivateMessage {
-                            text: match encrypter::encrypt(args[1].as_bytes(), &rsa) {
+                            text: match synac::encrypt(args[1].as_bytes(), &rsa) {
                                 Ok(ok) => ok,
                                 Err(err) => {
                                     println!("Error! Failed to encrypt! D:");
@@ -639,7 +610,7 @@ fn main() {
                     let mut session = session.lock().unwrap();
                     let session = require_session!(session);
 
-                    let id = match find_user(&session.users, &args[0]) {
+                    let id = match find_user(&session.state.users, &args[0]) {
                         Some(user) => user.id,
                         None => {
                             println!("No such user");
@@ -668,7 +639,7 @@ fn main() {
                     println!("Enter his/her public key here:");
 
                     let mut key = String::with_capacity(512); // idk, just guessing
-                    while let Ok(line) = screen.readline(None) {
+                    while let Ok(line) = screen.readline() {
                         if line == "END" { break; }
 
                         key.push_str(&line);
@@ -699,7 +670,7 @@ fn main() {
                     };
 
                     let packet = match &*args[0] {
-                        "group" => if let Some(group) = session.groups.get(&id) {
+                        "group" => if let Some(group) = session.state.groups.get(&id) {
                             let (mut allow, mut deny) = (group.allow, group.deny);
 
                             println!("Editing: {}", group.name);
@@ -744,7 +715,7 @@ fn main() {
                                 }
                             }))
                         } else { None },
-                        "channel" => if let Some(channel) = session.channels.get(&id) {
+                        "channel" => if let Some(channel) = session.state.channels.get(&id) {
                             println!("Editing: #{}", channel.name);
                             println!("(Press enter to keep current value)");
                             println!();
@@ -768,7 +739,7 @@ fn main() {
                                 keep_overrides: false
                             }))
                         } else { None },
-                        "user" => if let Some(user) = session.users.get(&id) {
+                        "user" => if let Some(user) = session.state.users.get(&id) {
                             let groups = match screen.get_user_groups(user.groups.clone(), session) {
                                 Ok(ok) => ok,
                                 Err(_) => continue
@@ -804,7 +775,7 @@ fn main() {
             }
             let name = args.remove(0);
 
-            let recipient = match find_user(&session.users, &name) {
+            let recipient = match find_user(&session.state.users, &name) {
                 Some(user) if user.bot => user.id,
                 Some(_) => { println!("That's not a bot!"); continue; },
                 None => { println!("No such user"); continue; }
@@ -856,7 +827,7 @@ fn main() {
 
     tx_stop.send(()).unwrap();
     if let Some(ref mut session) = *session.lock().unwrap() {
-        let _ = common::write(&mut session.stream, &Packet::Close);
+        let _ = session.inner.send(&Packet::Close);
     }
     thread.join().unwrap();
     screen.stop();

@@ -1,6 +1,5 @@
 use *;
-use common::Packet;
-use openssl::ssl::SSL_VERIFY_PEER;
+use synac::common::Packet;
 
 use frontend;
 
@@ -17,7 +16,7 @@ pub fn connect(
     }
     macro_rules! readline {
         ($break:block) => {
-            match screen.readline(None) {
+            match screen.readline() {
                 Ok(ok) => ok,
                 Err(_) => $break
             }
@@ -55,60 +54,23 @@ pub fn connect(
             &[&addr.to_string(), &public_key]
         ).unwrap();
     }
-    let stream = match TcpStream::connect(addr) {
+    let mut inner = match synac::Session::new(addr, public_key) {
         Ok(ok) => ok,
         Err(err) => {
-            println!("Could not connect!");
-            println!("{}", err);
+            println!("Failed to open session: {}", err);
             return None;
-        }
-    };
-    let mut stream = {
-        let mut config = connector.ssl.configure().expect("Failed to configure SSL connector");
-        config.ssl_mut().set_verify_callback(SSL_VERIFY_PEER, move |_, cert| {
-            if let Some(cert) = cert.current_cert() {
-                if let Ok(pkey) = cert.public_key() {
-                    if let Ok(pem) = pkey.public_key_to_pem() {
-                        let digest = openssl::sha::sha256(&pem);
-                        let mut digest_str = String::with_capacity(digest.len());
-                        for byte in &digest {
-                            digest_str.push_str(&format!("{:02X}", byte));
-                        }
-                        use std::ascii::AsciiExt;
-                        return public_key.trim().eq_ignore_ascii_case(&digest_str);
-                    }
-                }
-            }
-            false
-        });
-
-        match
-config.danger_connect_without_providing_domain_for_certificate_verification_and_server_name_indication(stream)
-        {
-            Ok(ok) => ok,
-            Err(_) => {
-                println!("Failed to validate certificate");
-                return None;
-            }
         }
     };
 
     let mut id = None;
     if let Some(token) = token {
-        let packet = Packet::Login(common::Login {
-            bot: false,
-            name: nick.to_string(),
-            password: None,
-            token: Some(token.to_string())
-        });
-
-        if let Err(err) = common::write(&mut stream, &packet) {
+        if let Err(err) = inner.login_with_token(false, nick.to_string(), token.to_string()) {
             println!("Could not request login");
             println!("{}", err);
             return None;
         }
 
-        match common::read(&mut stream) {
+        match inner.read() {
             Ok(Packet::LoginSuccess(login)) => {
                 id = Some(login.id);
                 if login.created {
@@ -160,20 +122,13 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
         println!("Password: ");
         let pass = readpass!({ return None; });
 
-        let packet = Packet::Login(common::Login {
-            bot: false,
-            name: nick.to_string(),
-            password: Some(pass),
-            token: None
-        });
-
-        if let Err(err) = common::write(&mut stream, &packet) {
+        if let Err(err) = inner.login_with_password(false, nick.to_string(), pass) {
             println!("Could not request login");
             println!("{}", err);
             return None;
         }
 
-        match common::read(&mut stream) {
+        match inner.read() {
             Ok(Packet::LoginSuccess(login)) => {
                 db.execute(
                     "UPDATE servers SET token = ? WHERE ip = ?",
@@ -218,8 +173,8 @@ config.danger_connect_without_providing_domain_for_certificate_verification_and_
             }
         }
     }
-    stream.get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
-    Some(Session::new(addr, id.unwrap(), stream))
+    inner.inner_stream().get_ref().set_nonblocking(true).expect("Failed to make stream non-blocking");
+    Some(Session::new(addr, id.unwrap(), inner))
 }
 
 pub fn reconnect(
@@ -242,10 +197,10 @@ pub fn write(
     screen: &frontend::Screen,
     session: &mut Session
 ) -> bool {
-    if let Err(err) = common::write(&mut session.stream, packet) {
+    if let Err(err) = session.inner.send(packet) {
         screen.log(String::from("Sending failed."));
         screen.log(format!("{}", err));
-        if let common::Error::IoError(err) = err {
+        if let synac::Error::IoError(err) = err {
             reconnect(&connector, &err, screen, session);
         }
         return false;
