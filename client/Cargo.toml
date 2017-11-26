@@ -7,12 +7,5 @@ authors = ["jD91mZM2 <me@krake.one>"]
 openssl   = "0.9"
 rusqlite  = "0.12"
 rustyline = "1.0"
-
-cursive = { version = "0.7", optional = true }
-termion = { version = "1.5", optional = true }
-
+termion   = "1.5"
 common = { path = "../common/" }
-
-[features]
-default = ["minimal"]
-minimal = ["termion"]

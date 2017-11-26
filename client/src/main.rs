@@ -1,8 +1,3 @@
-#![cfg_attr(feature = "cursive", feature(fnbox))]
-#![cfg_attr(feature = "cursive", feature(refcell_replace_swap))]
-#![cfg_attr(feature = "cursive", feature(string_retain))]
-#![cfg_attr(feature = "cursive", feature(vec_remove_item))]
-
 extern crate openssl;
 extern crate rusqlite;
 extern crate rustyline;
@@ -19,20 +14,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "termion")]
-mod frontend_minimal;
-#[cfg(feature = "cursive")]
-mod frontend_cursive;
+mod frontend;
 mod connect;
 mod encrypter;
 mod help;
 mod listener;
 mod parser;
-
-#[cfg(feature = "termion")]
-use frontend_minimal as frontend;
-#[cfg(feature = "cursive")]
-use frontend_cursive as frontend;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum LogEntryId {
