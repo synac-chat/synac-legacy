@@ -161,9 +161,10 @@ pub fn listen(
                     Packet::Err(common::ERR_UNKNOWN_GROUP) => {
                         println!("This group was deleted");
                     },
-                    packet => {
-                        println!("Unimplemented packet: {:?}", packet);
-                    }
+                    Packet::Err(err) => {
+                        println!("Unimplemented error: {:?}", err);
+                    },
+                    _ => {}
                 }
                 let _ = tx_sent.try_send(());
             }
