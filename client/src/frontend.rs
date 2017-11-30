@@ -1,14 +1,15 @@
 extern crate termion;
 
 use *;
+use rustyline::completion::{extract_word, Completer as RustyCompleter};
 use rustyline::error::ReadlineError;
+use rustyline;
+use self::termion::screen::AlternateScreen;
+use self::termion::{cursor, color};
 use std::cmp;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Mutex, RwLock};
-use self::termion::{cursor, color};
-use self::termion::screen::AlternateScreen;
-use rustyline;
 
 pub struct MuteGuard<'a>(&'a Screen);
 impl<'a> Drop for MuteGuard<'a> {
@@ -28,8 +29,37 @@ pub fn sanitize(text: String) -> String {
     text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
 }
 
+struct Completer {
+    session: Arc<Mutex<Option<Session>>>
+}
+
+impl RustyCompleter for Completer {
+    fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<String>), ReadlineError> {
+        let break_chars = &[' ', '"', '\''].into_iter().cloned().collect();
+        let (start, word) = extract_word(line, pos, &break_chars);
+
+        let mut output = Vec::new();
+
+        if let Some(ref session) = *self.session.lock().unwrap() {
+            output.extend(session.state.users.values()
+                .map(|user| user.name.clone())
+                .filter(|name| name.starts_with(word)));
+            output.extend(session.state.channels.values()
+                .map(|channel| {
+                    let mut name = String::with_capacity(channel.name.len() + 1);
+                    name.push('#');
+                    name.push_str(&channel.name);
+                    name
+                })
+                .filter(|name| name.starts_with(word)));
+        }
+
+        Ok((start, output))
+    }
+}
+
 pub struct Screen {
-    editor: Mutex<rustyline::Editor<()>>,
+    editor: Mutex<rustyline::Editor<Completer>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,
     mute:   AtomicBool,
     stdin:  Mutex<io::Stdin>,
@@ -37,14 +67,19 @@ pub struct Screen {
     typing: RwLock<String>
 }
 impl Screen {
-    pub fn new() -> Screen {
+    pub fn new(session: &Arc<Mutex<Option<Session>>>) -> Screen {
         let stdin = io::stdin();
         stdin.lock();
         let stdout = io::stdout();
         stdout.lock();
 
+        let mut editor = rustyline::Editor::<Completer>::new();
+        editor.set_completer(Some(Completer {
+            session: Arc::clone(session),
+        }));
+
         Screen {
-            editor: Mutex::new(rustyline::Editor::<()>::new()),
+            editor: Mutex::new(editor),
             log:    RwLock::new(Vec::new()),
             mute:   AtomicBool::new(false),
             stdin:  Mutex::new(stdin),

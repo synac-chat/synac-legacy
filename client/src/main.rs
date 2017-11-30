@@ -60,7 +60,7 @@ impl Session {
 
 fn main() {
     let session: Arc<Mutex<Option<Session>>> = Arc::new(Mutex::new(None));
-    let screen = Arc::new(frontend::Screen::new());
+    let screen = Arc::new(frontend::Screen::new(&session));
 
     // See https://github.com/rust-lang/rust/issues/35853
     macro_rules! println {
@@ -180,14 +180,12 @@ fn main() {
         listener::listen(db_clone, screen_clone, tx_sent, session_clone, rx_stop);
     });
 
-    let mut editor = rustyline::Editor::<()>::new();
     loop {
         screen.repaint();
         let input = readline!({ break; });
         if input.is_empty() {
             continue;
         }
-        editor.add_history_entry(&input);
 
         macro_rules! require_session {
             ($session:expr) => {
