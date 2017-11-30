@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["jD91mZM2 <me@krake.one>"]
 
 [dependencies]
-rmp-serde    = "0.13"
-serde        = "1.0"
-serde_derive = "1.0"
+failure        = "0.1"
+failure_derive = "0.1"
+rmp-serde      = "0.13"
+serde          = "1.0"
+serde_derive   = "1.0"

@@ -1,3 +1,6 @@
+extern crate failure;
+#[macro_use] extern crate failure_derive;
+
 extern crate rmp_serde as rmps;
 #[macro_use] extern crate serde_derive;
 
@@ -77,7 +80,7 @@ pub struct User {
 
 // CLIENT PACKETS
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Close {}
+pub struct Close;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ChannelCreate {
     pub name: String,
@@ -287,35 +290,19 @@ pub fn decode_u16(bytes: &[u8]) -> u16 {
     ((bytes[0] as u16) << 8) + bytes[1] as u16
 }
 
-#[derive(Debug)]
+#[derive(Debug, Fail)]
 pub enum Error {
-    DecodeError(rmps::decode::Error),
-    EncodeError(rmps::encode::Error),
-    PacketTooBigError,
-    IoError(std::io::Error)
+    #[fail(display = "{}", _0)]
+    DecodeError(#[cause] rmps::decode::Error),
+    #[fail(display = "{}", _0)]
+    EncodeError(#[cause] rmps::encode::Error),
+    #[fail(display = "{}", _0)]
+    IoError(#[cause] std::io::Error),
+
+    #[fail(display = "Packet size must fit in an u16")]
+    PacketTooBigError
 }
 
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        match *self {
-            Error::DecodeError(ref inner) => inner.description(),
-            Error::EncodeError(ref inner) => inner.description(),
-            Error::PacketTooBigError      => "Packet size must fit into an u16",
-            Error::IoError(ref inner)     => inner.description()
-        }
-    }
-}
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::error::Error as StdError;
-        match *self {
-            Error::DecodeError(ref inner) => write!(f, "{}", inner),
-            Error::EncodeError(ref inner) => write!(f, "{}", inner),
-            Error::PacketTooBigError      => write!(f, "{}", self.description()),
-            Error::IoError(ref inner)     => write!(f, "{}", inner)
-        }
-    }
-}
 impl From<rmps::decode::Error> for Error {
     fn from(err: rmps::decode::Error) -> Self {
         Error::DecodeError(err)
