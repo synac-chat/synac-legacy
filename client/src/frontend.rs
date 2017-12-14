@@ -62,6 +62,7 @@ pub struct Screen {
     editor: Mutex<rustyline::Editor<Completer>>,
     log:    RwLock<Vec<(String, LogEntryId)>>,
     mute:   AtomicBool,
+    status: Mutex<Vec<String>>,
     stdin:  Mutex<io::Stdin>,
     stdout: Mutex<AlternateScreen<io::Stdout>>,
     typing: RwLock<String>
@@ -82,6 +83,7 @@ impl Screen {
             editor: Mutex::new(editor),
             log:    RwLock::new(Vec::new()),
             mute:   AtomicBool::new(false),
+            status: Mutex::new(Vec::new()),
             stdin:  Mutex::new(stdin),
             stdout: Mutex::new(AlternateScreen::from(stdout)),
             typing: RwLock::new(String::new())
@@ -127,6 +129,20 @@ impl Screen {
         // TODO: remove_item once stable
     }
 
+    pub fn update(&self, session: &Session) {
+        let mut status = self.status.lock().unwrap();
+        status.clear();
+
+        status.push(String::new());
+        status.push(String::from("Channels:"));
+        for channel in session.state.channels.values() {
+            let mut string = String::with_capacity(2 + channel.name.len());
+            string.push_str(" #");
+            string.push_str(&channel.name);
+            status.push(string);
+        }
+        status[2..].sort_unstable();
+    }
     pub fn repaint(&self) {
         if self.mute.load(AtomicOrdering::Relaxed) {
             return;
@@ -136,17 +152,32 @@ impl Screen {
     fn repaint_(&self, mut log: &[(String, LogEntryId)]) {
         let mut stdout = self.stdout.lock().unwrap();
         let (width, height) = termion::terminal_size().unwrap_or((50, 50));
-        let cw =  width.saturating_sub(3) as usize;
-        let ch = height.saturating_sub(3) as usize;
+        let cw =  width.saturating_sub(11 + 2);
+        let ch = height.saturating_sub(3);
+
+        let status = self.status.lock().unwrap();
+
+        let mut index = 0;
+        let mut status = |stdout: &mut AlternateScreen<io::Stdout>, left| {
+            if let Some(text) = status.get(index) {
+                index += 1;
+                writeln!(stdout, "{}{}", cursor::Right(cw + 2 - left), text).unwrap();
+            } else {
+                writeln!(stdout).unwrap();
+            }
+        };
+
         loop {
             let mut lines = 0;
             for msg in log {
                 lines += 1;
 
+                let indent_amount = msg.0.find(": ").map(|i| i+2).unwrap_or_default();
+
                 let mut i = 0;
                 for c in msg.0.chars() {
-                    if (i != 0 && i == cw) || c == '\n' {
-                        i = 0;
+                    if (i != 0 && i == cw as usize) || c == '\n' {
+                        i = indent_amount;
                         lines += 1;
                     } else {
                         i += 1;
@@ -171,7 +202,7 @@ impl Screen {
             let mut text   = &**text;
 
             if text.is_empty() {
-                writeln!(stdout).unwrap();
+                status(&mut stdout, 0);
             }
             while !text.is_empty() {
                 let indent_amount = if !first && indent.is_empty() {
@@ -184,9 +215,9 @@ impl Screen {
                 skip = 0;
 
                 let newline = text.find('\n').unwrap_or(std::usize::MAX);
-                let width = cmp::min(newline, cmp::min(cw.saturating_sub(indent_amount), text.len()));
+                let width = cmp::min(newline, cmp::min((cw as usize).saturating_sub(indent_amount), text.len()));
                 if let LogEntryId::Sending = id {
-                    writeln!(
+                    write!(
                         stdout,
                         "{}{}{}{}",
                         indent,
@@ -195,8 +226,9 @@ impl Screen {
                         color::Fg(color::Reset)
                     ).unwrap();
                 } else {
-                    writeln!(stdout, "{}{}", indent, &text[..width]).unwrap();
+                    write!(stdout, "{}{}", indent, &text[..width]).unwrap();
                 }
+                status(&mut stdout, (indent_amount + width) as u16);
                 text = &text[width..];
                 if width == newline {
                     skip += 1;

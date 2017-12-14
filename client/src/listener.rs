@@ -165,6 +165,7 @@ pub fn listen(
                     },
                     _ => {}
                 }
+                screen.update(&session);
                 let _ = tx_sent.try_send(());
             }
         }
