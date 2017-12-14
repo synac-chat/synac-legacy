@@ -5,7 +5,7 @@ authors = ["jD91mZM2 <me@krake.one>"]
 
 [dependencies]
 openssl   = "0.9"
-rusqlite  = "0.12"
+rusqlite  = "0.13"
 rustyline = "1.0"
 synac     = "0.1"
 termion   = "1.5"
