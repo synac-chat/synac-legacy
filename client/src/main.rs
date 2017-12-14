@@ -828,7 +828,6 @@ fn main() {
         let _ = session.inner.send(&Packet::Close);
     }
     thread.join().unwrap();
-    screen.stop();
 }
 
 fn find_user<'a>(users: &'a HashMap<usize, common::User>, name: &str) -> Option<&'a common::User> {

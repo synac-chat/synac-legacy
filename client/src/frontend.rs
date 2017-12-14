@@ -87,7 +87,6 @@ impl Screen {
             typing: RwLock::new(String::new())
         }
     }
-    pub fn stop(&self) {}
 
     pub fn clear(&self) {
         self.log.write().unwrap().clear();
@@ -259,7 +258,6 @@ impl Screen {
         *self.typing.write().unwrap() = typing;
         self.repaint();
     }
-    pub fn update(&self, _: &Session) {}
 
     pub fn get_channel_overrides(&self, mut overrides: HashMap<usize, (u8, u8)>, session: &Session)
             -> Result<HashMap<usize, (u8, u8)>, ()> {

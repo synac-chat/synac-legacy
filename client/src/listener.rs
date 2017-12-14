@@ -61,7 +61,6 @@ pub fn listen(
             if let Some(packet) = packet.unwrap() {
                 screen.delete(LogEntryId::Sending);
                 session.state.update(&packet);
-                screen.update(session);
 
                 match packet {
                     Packet::LoginSuccess(event) => {
