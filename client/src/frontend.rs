@@ -160,8 +160,14 @@ impl Screen {
         let mut index = 0;
         let mut status = |stdout: &mut AlternateScreen<io::Stdout>, left| {
             if let Some(text) = status.get(index) {
+                let mut text = &text as &str;
+                let mut ellipsis = "";
+                if text.len() > 11 {
+                    text = &text[..10];
+                    ellipsis = "…";
+                }
                 index += 1;
-                writeln!(stdout, "{}{}", cursor::Right(cw + 2 - left), text).unwrap();
+                writeln!(stdout, "{}{}{}", cursor::Right(cw + 2 - left), text, ellipsis).unwrap();
             } else {
                 writeln!(stdout).unwrap();
             }
