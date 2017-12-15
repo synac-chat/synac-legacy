@@ -1,18 +1,19 @@
 extern crate gtk;
 extern crate rusqlite;
+extern crate synac;
 
 use gtk::prelude::*;
 use gtk::{
     Align,
     Box as GtkBox,
     Button,
-    Dialog,
-    DialogFlags,
     Entry,
     Label,
+    Menu,
+    MenuItem,
     Orientation,
-    ResponseType,
     Separator,
+    Stack,
     Window,
     WindowType
 };
@@ -20,6 +21,7 @@ use rusqlite::Connection as SqlConnection;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::{fs, env};
+use synac::common;
 
 fn main() {
     #[cfg(unix)]
@@ -85,11 +87,13 @@ fn main() {
         eprintln!("gtk error: {}", err);
         return;
     }
+
     let window = Window::new(WindowType::Toplevel);
     window.set_title("Synac GTK+ client");
     window.set_default_size(1000, 700);
 
-    let hbox = GtkBox::new(Orientation::Horizontal, 10);
+    let stack = Stack::new();
+    let main = GtkBox::new(Orientation::Horizontal, 10);
 
     let servers_wrapper = GtkBox::new(Orientation::Vertical, 0);
 
@@ -107,53 +111,11 @@ fn main() {
     add.set_valign(Align::End);
     add.set_vexpand(true);
 
-    let db_clone = Rc::clone(&db);
-    let window_clone = window.clone();
-    let servers_clone = servers.clone();
-    add.connect_clicked(move |_| {
-        let dialog = Dialog::new_with_buttons(
-            Some("Synac: Add server"),
-            Some(&window_clone),
-            DialogFlags::MODAL,
-            &[("Cancel", ResponseType::Cancel.into()), ("Ok", ResponseType::Ok.into())]
-        );
-        let content = dialog.get_content_area();
-
-        let name = Entry::new();
-        name.set_placeholder_text("Name");
-        content.add(&name);
-
-        let server = Entry::new();
-        server.set_placeholder_text("Server IP");
-        content.add(&server);
-
-        let hash = Entry::new();
-        hash.set_placeholder_text("Server's certificate hash");
-        content.add(&hash);
-
-        let db_clone = Rc::clone(&db_clone);
-        let servers_clone = servers_clone.clone();
-        dialog.connect_response(move |dialog, response| {
-            dialog.destroy();
-            if response != ResponseType::Ok.into() {
-                return;
-            }
-            let name = name.get_text().unwrap_or_default();
-            let server = server.get_text().unwrap_or_default();
-            let hash = hash.get_text().unwrap_or_default();
-            db_clone.execute(
-                "INSERT INTO servers (name, ip, key) VALUES (?, ?, ?)",
-                &[&name, &server, &hash]
-            ).unwrap();
-            render_servers(&db_clone, &servers_clone);
-        });
-        dialog.show_all();
-    });
     servers_wrapper.add(&add);
 
-    hbox.add(&servers_wrapper);
+    main.add(&servers_wrapper);
 
-    hbox.add(&Separator::new(Orientation::Horizontal));
+    main.add(&Separator::new(Orientation::Horizontal));
 
     let channels = GtkBox::new(Orientation::Vertical, 2);
 
@@ -168,9 +130,9 @@ fn main() {
     channels.add(&Button::new_with_label("Channel 3"));
     channels.add(&Button::new_with_label("Channel 4"));
 
-    hbox.add(&channels);
+    main.add(&channels);
 
-    hbox.add(&Separator::new(Orientation::Horizontal));
+    main.add(&Separator::new(Orientation::Horizontal));
 
     let content = GtkBox::new(Orientation::Vertical, 2);
 
@@ -190,9 +152,72 @@ fn main() {
     input.set_placeholder_text("Send a message");
     content.add(&input);
 
-    hbox.add(&content);
+    main.add(&content);
+    stack.add(&main);
 
-    window.add(&hbox);
+    let add_server = GtkBox::new(Orientation::Vertical, 2);
+
+    let name = Entry::new();
+    name.set_placeholder_text("Name");
+    add_server.add(&name);
+    add_server.add(&Label::new("The server name. This can be anything you want it to."));
+
+    let server = Entry::new();
+    server.set_placeholder_text("Server IP");
+    add_server.add(&server);
+    add_server.add(&Label::new(&*format!("The server IP address. The default port is {}.", common::DEFAULT_PORT)));
+
+    let hash = Entry::new();
+    hash.set_placeholder_text("Server's certificate hash");
+    add_server.add(&hash);
+    add_server.add(&Label::new("The server's certificate public key hash.\n\
+                               This is to verify nobody is snooping on your connection"));
+
+    let add_server_controls = GtkBox::new(Orientation::Horizontal, 2);
+
+    let add_server_cancel = Button::new_with_label("Cancel");
+    let stack_clone = stack.clone();
+    let main_clone  = main.clone();
+    add_server_cancel.connect_clicked(move |_| {
+        stack_clone.set_visible_child(&main_clone);
+    });
+    add_server_controls.add(&add_server_cancel);
+
+    let add_server_ok = Button::new_with_label("Ok");
+
+    let db_clone = Rc::clone(&db);
+    let servers_clone = servers.clone();
+    let stack_clone = stack.clone();
+    let main_clone  = main.clone();
+    add_server_ok.connect_clicked(move |_| {
+        let name_text   = name.get_text().unwrap_or_default();
+        let server_text = server.get_text().unwrap_or_default();
+        let hash_text   = hash.get_text().unwrap_or_default();
+
+        name.set_text("");
+        server.set_text("");
+        hash.set_text("");
+
+        stack_clone.set_visible_child(&main_clone);
+
+        db_clone.execute(
+            "INSERT INTO servers (name, ip, key) VALUES (?, ?, ?)",
+            &[&name_text, &server_text, &hash_text]
+        ).unwrap();
+        render_servers(&db_clone, &servers_clone);
+    });
+    add_server_controls.add(&add_server_ok);
+
+    add_server.add(&add_server_controls);
+    stack.add(&add_server);
+
+    let stack_clone = stack.clone();
+    let add_server = add_server.clone();
+    add.connect_clicked(move |_| {
+        stack_clone.set_visible_child(&add_server);
+    });
+
+    window.add(&stack);
     window.show_all();
     window.connect_delete_event(|_, _| {
         gtk::main_quit();
@@ -201,7 +226,7 @@ fn main() {
 
     gtk::main();
 }
-fn render_servers(db: &SqlConnection, servers: &GtkBox) {
+fn render_servers(db: &Rc<SqlConnection>, servers: &GtkBox) {
     for child in servers.get_children() {
         servers.remove(&child);
     }
@@ -216,6 +241,27 @@ fn render_servers(db: &SqlConnection, servers: &GtkBox) {
         let button = Button::new_with_label(&name);
         button.connect_clicked(move |_| {
             println!("Server with ID {} was clicked", id);
+        });
+
+        let db_clone = Rc::clone(&db);
+        let servers_clone = servers.clone();
+        button.connect_button_press_event(move |_, event| {
+            if event.get_button() == 3 {
+                let menu = Menu::new();
+
+                let forget = MenuItem::new_with_label("Forget server");
+                let db_clone = Rc::clone(&db_clone);
+                let servers_clone = servers_clone.clone();
+                forget.connect_activate(move |_| {
+                    db_clone.execute("DELETE FROM servers WHERE id = ?", &[&(id as i64)]).unwrap();
+                    render_servers(&db_clone, &servers_clone);
+                });
+                menu.add(&forget);
+
+                menu.show_all();
+                menu.popup_at_pointer(Some(&**event));
+            }
+            Inhibit(false)
         });
         servers.add(&button);
     }
