@@ -290,7 +290,7 @@ fn render_servers(connections: &Arc<Connections>, db: &Rc<SqlConnection>, server
                 None => return
             };
             println!("Server with IP {} was clicked", ip);
-            let mut err = false;
+            let mut err = true;
             connections_clone.execute(&ip, |result| {
                 err = result.is_err();
             });
