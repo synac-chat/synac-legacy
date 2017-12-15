@@ -259,7 +259,7 @@ fn main() {
                         continue;
                     }
 
-                    let addr = match parse_ip(&args[0]) {
+                    let addr = match parse_addr(&args[0]) {
                         Some(some) => some,
                         None => {
                             println!("Could not parse IP");
@@ -354,7 +354,7 @@ fn main() {
                 },
                 "forget" => {
                     usage!(1, "forget <ip>");
-                    let addr = match parse_ip(&args[0]) {
+                    let addr = match parse_addr(&args[0]) {
                         Some(some) => some,
                         None => {
                             println!("Invalid IP");
@@ -902,28 +902,17 @@ fn from_perm_string(input: &str, allow: &mut u8, deny: &mut u8) -> bool {
     true
 }
 
-fn parse_ip(input: &str) -> Option<SocketAddr> {
-    let mut parts = input.split(':');
-    let ip = match parts.next() {
-        Some(some) => some,
-        None => return None
+fn parse_addr(input: &str) -> Option<SocketAddr> {
+    let mut parts = input.rsplitn(2, ':');
+    let addr = match (parts.next()?, parts.next()) {
+        (port, Some(ip)) => (ip, port.parse().ok()?),
+        (ip,   None)     => (ip, common::DEFAULT_PORT)
     };
-    let port = match parts.next() {
-        Some(some) => match some.parse() {
-            Ok(ok) => ok,
-            Err(_) => return None
-        },
-        None => common::DEFAULT_PORT
-    };
-    if parts.next().is_some() {
-        return None;
-    }
 
     use std::net::ToSocketAddrs;
-    match (ip, port).to_socket_addrs() {
-        Ok(mut ok) => ok.next(),
-        Err(_) => { None }
-    }
+    addr.to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
 }
 
 fn get_typing_string<I, V>(mut people: I, len: usize) -> String

@@ -1,26 +1,39 @@
+#[macro_use] extern crate failure;
 extern crate gtk;
 extern crate rusqlite;
 extern crate synac;
+
+mod connections;
 
 use gtk::prelude::*;
 use gtk::{
     Align,
     Box as GtkBox,
     Button,
+    ButtonsType,
+    Dialog,
+    DialogFlags,
     Entry,
+    InputPurpose,
     Label,
     Menu,
     MenuItem,
+    MessageDialog,
+    MessageType,
     Orientation,
+    ResponseType,
     Separator,
     Stack,
     Window,
     WindowType
 };
+use connections::Connections;
 use rusqlite::Connection as SqlConnection;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::{fs, env};
+use std::sync::Arc;
+use std::{env, fs};
 use synac::common;
 
 fn main() {
@@ -59,10 +72,9 @@ fn main() {
                 )", &[])
         .expect("Couldn't create SQLite table");
     db.execute("CREATE TABLE IF NOT EXISTS servers (
-                    id      ROWID NOT NULL,
                     ip      TEXT NOT NULL PRIMARY KEY,
-                    key     BLOB NOT NULL,
                     name    TEXT NOT NULL,
+                    hash    BLOB NOT NULL,
                     token   TEXT
                 )", &[])
         .expect("Couldn't create SQLite table");
@@ -88,6 +100,8 @@ fn main() {
         return;
     }
 
+    let connections = Connections::new(&db, nick);
+
     let window = Window::new(WindowType::Toplevel);
     window.set_title("Synac GTK+ client");
     window.set_default_size(1000, 700);
@@ -97,14 +111,14 @@ fn main() {
 
     let servers_wrapper = GtkBox::new(Orientation::Vertical, 0);
 
-    let user_name = Label::new(&*nick);
+    let user_name = Label::new(&*connections.nick);
     user_name.set_property_margin(10);
     servers_wrapper.add(&user_name);
 
     servers_wrapper.add(&Separator::new(Orientation::Vertical));
 
     let servers = GtkBox::new(Orientation::Vertical, 2);
-    render_servers(&db, &servers);
+    render_servers(&connections, &db, &servers, &window);
     servers_wrapper.add(&servers);
 
     let add = Button::new_with_label("Add...");
@@ -186,13 +200,20 @@ fn main() {
     let add_server_ok = Button::new_with_label("Ok");
 
     let db_clone = Rc::clone(&db);
+    let connections_clone = Arc::clone(&connections);
+    let main_clone  = main.clone();
     let servers_clone = servers.clone();
     let stack_clone = stack.clone();
-    let main_clone  = main.clone();
+    let window_clone = window.clone();
     add_server_ok.connect_clicked(move |_| {
         let name_text   = name.get_text().unwrap_or_default();
         let server_text = server.get_text().unwrap_or_default();
         let hash_text   = hash.get_text().unwrap_or_default();
+
+        let ip = match connections::parse_addr(&server_text) {
+            Some(ip) => ip,
+            None => return
+        };
 
         name.set_text("");
         server.set_text("");
@@ -201,10 +222,10 @@ fn main() {
         stack_clone.set_visible_child(&main_clone);
 
         db_clone.execute(
-            "INSERT INTO servers (name, ip, key) VALUES (?, ?, ?)",
-            &[&name_text, &server_text, &hash_text]
+            "INSERT INTO servers (name, ip, hash) VALUES (?, ?, ?)",
+            &[&name_text, &ip.to_string(), &hash_text]
         ).unwrap();
-        render_servers(&db_clone, &servers_clone);
+        render_servers(&connections_clone, &db_clone, &servers_clone, &window_clone);
     });
     add_server_controls.add(&add_server_ok);
 
@@ -224,37 +245,109 @@ fn main() {
         Inhibit(false)
     });
 
+    gtk::idle_add(move || {
+        match connections.try_read() {
+            Ok(Some(packet)) => println!("received {:?}", packet),
+            Ok(None) => (),
+            Err(err) => eprintln!("receive error: {}", err)
+        }
+        Continue(true)
+    });
     gtk::main();
 }
-fn render_servers(db: &Rc<SqlConnection>, servers: &GtkBox) {
+fn alert(window: &Window, kind: MessageType, message: &str) {
+    let dialog = MessageDialog::new(
+        Some(window),
+        DialogFlags::MODAL,
+        kind,
+        ButtonsType::Ok,
+        message
+    );
+    dialog.connect_response(|dialog, _| dialog.destroy());
+    dialog.show_all();
+}
+fn parse_addr(ip: &str, window: &Window) -> Option<SocketAddr> {
+    connections::parse_addr(&ip).or_else(|| {
+        alert(window, MessageType::Error, "Failed to parse IP address. Format: <ip[:port]>");
+        None
+    })
+}
+fn render_servers(connections: &Arc<Connections>, db: &Rc<SqlConnection>, servers: &GtkBox, window: &Window) {
     for child in servers.get_children() {
         servers.remove(&child);
     }
-    let mut stmt = db.prepare("SELECT name, id FROM servers ORDER BY name").unwrap();
+    let mut stmt = db.prepare("SELECT ip, name, hash, token FROM servers ORDER BY name").unwrap();
     let mut rows = stmt.query(&[]).unwrap();
 
     while let Some(row) = rows.next() {
-        let row  = row.unwrap();
-        let name: String = row.get(0);
-        let id = row.get::<_, i64>(1) as usize;
+        let row = row.unwrap();
+        let ip:   String = row.get(0);
+        let name: String = row.get(1);
+        let hash: String = row.get(2);
+        let token: Option<String> = row.get(3);
 
         let button = Button::new_with_label(&name);
+        let connections_clone = Arc::clone(&connections);
+        let db_clone = Rc::clone(&db);
+        let ip_clone = ip.clone();
+        let window_clone = window.clone();
         button.connect_clicked(move |_| {
-            println!("Server with ID {} was clicked", id);
+            let ip = match parse_addr(&ip_clone, &window_clone) {
+                Some(ip) => ip,
+                None => return
+            };
+            println!("Server with IP {} was clicked", ip);
+            let mut err = false;
+            connections_clone.execute(&ip, |result| {
+                err = result.is_err();
+            });
+            if err {
+                let result = connections_clone.connect(ip, hash.clone(), token.clone(), || {
+                    let dialog = Dialog::new_with_buttons(
+                        Some("Synac: Password dialog"),
+                        Some(&window_clone),
+                        DialogFlags::MODAL,
+                        &[("Ok", ResponseType::Ok.into())]
+                    );
+
+                    let content = dialog.get_content_area();
+                    content.add(&Label::new("Password:"));
+                    let entry = Entry::new();
+                    entry.set_input_purpose(InputPurpose::Password);
+                    entry.set_visibility(false);
+                    content.add(&entry);
+
+                    dialog.show_all();
+                    dialog.run();
+                    let text = entry.get_text().unwrap_or_default();
+                    dialog.destroy();
+                    Some((text, Rc::clone(&db_clone)))
+                });
+                if let Err(ref err) = result {
+                    alert(&window_clone, MessageType::Error, &format!("connection error: {}", err));
+                }
+                connections_clone.insert(ip, result);
+            }
         });
 
+        let connections_clone = Arc::clone(&connections);
         let db_clone = Rc::clone(&db);
         let servers_clone = servers.clone();
+        let window_clone = window.clone();
         button.connect_button_press_event(move |_, event| {
             if event.get_button() == 3 {
                 let menu = Menu::new();
 
                 let forget = MenuItem::new_with_label("Forget server");
+
+                let connections_clone = Arc::clone(&connections_clone);
                 let db_clone = Rc::clone(&db_clone);
+                let ip_clone = ip.clone();
                 let servers_clone = servers_clone.clone();
+                let window_clone = window_clone.clone();
                 forget.connect_activate(move |_| {
-                    db_clone.execute("DELETE FROM servers WHERE id = ?", &[&(id as i64)]).unwrap();
-                    render_servers(&db_clone, &servers_clone);
+                    db_clone.execute("DELETE FROM servers WHERE ip = ?", &[&ip_clone.to_string()]).unwrap();
+                    render_servers(&connections_clone, &db_clone, &servers_clone, &window_clone);
                 });
                 menu.add(&forget);
 

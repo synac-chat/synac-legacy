@@ -90,6 +90,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "client-gtk"
 version = "0.1.0"
 dependencies = [
+ "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "gtk 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rusqlite 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "synac 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",

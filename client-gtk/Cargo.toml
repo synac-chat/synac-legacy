@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["jD91mZM2 <me@krake.one>"]
 
 [dependencies]
+failure = "0.1.1"
 gtk = { version = "0.3", features = ["v3_22"] }
 rusqlite = "0.13"
 synac    = "0.2"
