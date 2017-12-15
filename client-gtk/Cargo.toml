@@ -8,3 +8,4 @@ failure = "0.1.1"
 gtk = { version = "0.3", features = ["v3_22"] }
 rusqlite = "0.13"
 synac    = "0.2"
+xdg      = "2.1"

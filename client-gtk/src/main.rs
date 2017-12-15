@@ -2,6 +2,7 @@
 extern crate gtk;
 extern crate rusqlite;
 extern crate synac;
+extern crate xdg;
 
 mod connections;
 
@@ -35,28 +36,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::{env, fs};
 use synac::common;
+use xdg::BaseDirectories;
 
 fn main() {
-    #[cfg(unix)]
-    let path = env::var("XDG_CONFIG_HOME").ok().map(|item| PathBuf::from(item)).or_else(|| {
-        env::home_dir().map(|mut home| {
-            home.push(".config");
-            home
-        })
-    }).map(|mut path| {
-        path.push("synac");
-        path
-    });
-    #[cfg(not(unix))]
-    let path = None;
-
-    let mut path = path.unwrap_or_else(|| PathBuf::new());
-    if let Err(err) = fs::create_dir_all(&path) {
-        eprintln!("Failed to create all directories");
-        eprintln!("{}", err);
-        return;
-    }
-    path.push("gtk-data.sqlite");
+    let basedirs = match BaseDirectories::with_prefix("synac") {
+        Ok(basedirs) => basedirs,
+        Err(err) => { eprintln!("error initializing xdg: {}", err); return; }
+    };
+    let path = match basedirs.find_data_file("data.sqlite") {
+        Some(path) => path,
+        None => match basedirs.place_data_file("data.sqlite") {
+            Ok(path) => path,
+            Err(err) => { eprintln!("error placing config: {}", err); return; }
+        }
+    };
     let db = match SqlConnection::open(&path) {
         Ok(ok) => ok,
         Err(err) => {

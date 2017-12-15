@@ -98,7 +98,7 @@ fn main() {
     #[cfg(not(unix))]
     let path = None;
 
-    let mut path = path.unwrap_or_else(|| PathBuf::new());
+    let mut path = path.unwrap_or_else(PathBuf::new);
     if let Err(err) = fs::create_dir_all(&path) {
         eprintln!("Failed to create all directories");
         eprintln!("{}", err);
