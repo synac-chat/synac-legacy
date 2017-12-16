@@ -31,10 +31,9 @@ use gtk::{
 use connections::Connections;
 use rusqlite::Connection as SqlConnection;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{env, fs};
+use std::env;
 use synac::common;
 use xdg::BaseDirectories;
 
@@ -260,7 +259,7 @@ fn alert(window: &Window, kind: MessageType, message: &str) {
     dialog.show_all();
 }
 fn parse_addr(ip: &str, window: &Window) -> Option<SocketAddr> {
-    connections::parse_addr(&ip).or_else(|| {
+    connections::parse_addr(ip).or_else(|| {
         alert(window, MessageType::Error, "Failed to parse IP address. Format: <ip[:port]>");
         None
     })
@@ -279,13 +278,14 @@ fn render_servers(connections: &Arc<Connections>, db: &Rc<SqlConnection>, server
         let hash: String = row.get(2);
         let token: Option<String> = row.get(3);
 
+        let ip_parsed = parse_addr(&ip, window);
+
         let button = Button::new_with_label(&name);
-        let connections_clone = Arc::clone(&connections);
-        let db_clone = Rc::clone(&db);
-        let ip_clone = ip.clone();
+        let connections_clone = Arc::clone(connections);
+        let db_clone = Rc::clone(db);
         let window_clone = window.clone();
         button.connect_clicked(move |_| {
-            let ip = match parse_addr(&ip_clone, &window_clone) {
+            let ip = match ip_parsed {
                 Some(ip) => ip,
                 None => return
             };
@@ -323,8 +323,8 @@ fn render_servers(connections: &Arc<Connections>, db: &Rc<SqlConnection>, server
             }
         });
 
-        let connections_clone = Arc::clone(&connections);
-        let db_clone = Rc::clone(&db);
+        let connections_clone = Arc::clone(connections);
+        let db_clone = Rc::clone(db);
         let servers_clone = servers.clone();
         let window_clone = window.clone();
         button.connect_button_press_event(move |_, event| {

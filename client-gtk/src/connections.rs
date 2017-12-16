@@ -61,7 +61,7 @@ pub struct Connections {
 impl Connections {
     pub fn new(db: &SqlConnection, nick: String) -> Arc<Self> {
         let me = Arc::new(Connections {
-            nick: nick.clone(),
+            nick: nick,
             servers: Arc::new(Mutex::new(HashMap::new()))
         });
         {
@@ -83,9 +83,9 @@ impl Connections {
                 let token = row.get(2);
 
                 let me_clone = Arc::clone(&me);
-                servers.insert(ip.clone(), Connection::Connecting(thread::spawn(move || {
+                servers.insert(ip, Connection::Connecting(thread::spawn(move || {
                     me_clone.connect(ip, hash, token, || None)
-                        .map(|session| Synac::new(session))
+                        .map(Synac::new)
                         .map_err(|err| { eprintln!("connect error: {}", err); err })
                 })));
             }
@@ -128,7 +128,7 @@ impl Connections {
     }
     pub fn insert(&self, ip: SocketAddr, result: Result<Session, Error>) {
         self.servers.lock().unwrap()
-            .insert(ip, Connection::Connected(result.map(|session| Synac::new(session))));
+            .insert(ip, Connection::Connected(result.map(Synac::new)));
     }
     pub fn execute<F>(&self, ip: &SocketAddr, callback: F)
         where F: FnOnce(Result<&mut Synac, &mut Error>)
