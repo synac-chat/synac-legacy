@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use synac::common::{self, Packet};
 use synac::{Listener, Session, State};
@@ -20,13 +20,15 @@ pub enum ConnectionError {
 }
 
 pub struct Synac {
-    listener: Listener,
-    session: Session,
-    state: State
+    pub addr: SocketAddr,
+    pub listener: Listener,
+    pub session: Session,
+    pub state: State
 }
 impl Synac {
-    pub fn new(session: Session) -> Self {
+    pub fn new(addr: SocketAddr, session: Session) -> Self {
         Synac {
+            addr: addr,
             listener: Listener::new(),
             session: session,
             state: State::new()
@@ -55,13 +57,15 @@ impl Connection {
 }
 
 pub struct Connections {
-    pub nick: String,
+    pub current_server: Mutex<Option<SocketAddr>>,
+    pub nick: RwLock<String>,
     pub servers: Arc<Mutex<HashMap<SocketAddr, Connection>>>
 }
 impl Connections {
     pub fn new(db: &SqlConnection, nick: String) -> Arc<Self> {
         let me = Arc::new(Connections {
-            nick: nick,
+            current_server: Mutex::new(None),
+            nick: RwLock::new(nick),
             servers: Arc::new(Mutex::new(HashMap::new()))
         });
         {
@@ -72,8 +76,8 @@ impl Connections {
 
             while let Some(row) = rows.next() {
                 let row = row.unwrap();
-                let ip  = match parse_addr(&row.get::<_, String>(0)) {
-                    Some(ip) => ip,
+                let addr  = match parse_addr(&row.get::<_, String>(0)) {
+                    Some(addr) => addr,
                     None => {
                         eprintln!("invalid socket address, skipping");
                         continue;
@@ -83,9 +87,9 @@ impl Connections {
                 let token = row.get(2);
 
                 let me_clone = Arc::clone(&me);
-                servers.insert(ip, Connection::Connecting(thread::spawn(move || {
-                    me_clone.connect(ip, hash, token, || None)
-                        .map(Synac::new)
+                servers.insert(addr, Connection::Connecting(thread::spawn(move || {
+                    me_clone.connect(addr, hash, token, || None)
+                        .map(|session| Synac::new(addr, session))
                         .map_err(|err| { eprintln!("connect error: {}", err); err })
                 })));
             }
@@ -93,14 +97,14 @@ impl Connections {
 
         me
     }
-    pub fn connect<F>(&self, ip: SocketAddr, hash: String, token: Option<String>, password: F)
+    pub fn connect<F>(&self, addr: SocketAddr, hash: String, token: Option<String>, password: F)
         -> Result<Session, Error>
         where F: FnOnce() -> Option<(String, Rc<SqlConnection>)>
     {
-        let mut session = Session::new(ip, hash)?;
+        let mut session = Session::new(addr, hash)?;
 
         if let Some(token) = token {
-            session.login_with_token(false, self.nick.clone(), token)?;
+            session.login_with_token(false, self.nick.read().unwrap().clone(), token)?;
             match session.read()? {
                 Packet::LoginSuccess(_) => {
                     session.set_nonblocking(true)?;
@@ -111,10 +115,10 @@ impl Connections {
             }
         }
         if let Some((password, db)) = password() {
-            session.login_with_password(false, self.nick.clone(), password)?;
+            session.login_with_password(false, self.nick.read().unwrap().clone(), password)?;
             match session.read()? {
                 Packet::LoginSuccess(login) => {
-                    db.execute("UPDATE servers SET token = ? WHERE ip = ?", &[&login.token, &ip.to_string()]).unwrap();
+                    db.execute("UPDATE servers SET token = ? WHERE ip = ?", &[&login.token, &addr.to_string()]).unwrap();
                     session.set_nonblocking(true)?;
                     return Ok(session);
                 },
@@ -126,41 +130,46 @@ impl Connections {
 
         Err(ConnectionError::InvalidToken.into())
     }
-    pub fn insert(&self, ip: SocketAddr, result: Result<Session, Error>) {
+    pub fn insert(&self, addr: SocketAddr, result: Synac) {
         self.servers.lock().unwrap()
-            .insert(ip, Connection::Connected(result.map(Synac::new)));
+            .insert(addr, Connection::Connected(Ok(result)));
     }
-    pub fn execute<F>(&self, ip: &SocketAddr, callback: F)
+    pub fn set_current(&self, addr: Option<SocketAddr>) {
+        *self.current_server.lock().unwrap() = addr;
+    }
+    pub fn execute<F>(&self, addr: &SocketAddr, callback: F)
         where F: FnOnce(Result<&mut Synac, &mut Error>)
     {
         let mut servers = self.servers.lock().unwrap();
-        let server = servers.get_mut(ip);
+        let server = servers.get_mut(addr);
 
         if let Some(inner) = server {
             callback(inner.join());
         }
     }
-    pub fn try_read(&self) -> Result<Option<Packet>, Error> {
+    pub fn try_read<F>(&self, mut callback: F) -> Result<(), Error>
+        where F: FnMut(&mut Synac, Packet)
+    {
         if let Ok(mut servers) = self.servers.try_lock() {
             for server in servers.values_mut() {
                 if let Ok(ref mut synac) = server.join() {
                     let read = synac.listener.try_read(synac.session.inner_stream())?;
-                    if read.is_some() {
-                        synac.state.update(read.as_ref().unwrap());
-                        return Ok(read);
+                    if let Some(packet) = read {
+                        synac.state.update(&packet);
+                        callback(synac, packet);
                     }
                 }
             }
         }
-        Ok(None)
+        Ok(())
     }
 }
 
 pub fn parse_addr(input: &str) -> Option<SocketAddr> {
     let mut parts = input.rsplitn(2, ':');
     let addr = match (parts.next()?, parts.next()) {
-        (port, Some(ip)) => (ip, port.parse().ok()?),
-        (ip,   None)     => (ip, common::DEFAULT_PORT)
+        (port, Some(addr)) => (addr, port.parse().ok()?),
+        (addr,   None)     => (addr, common::DEFAULT_PORT)
     };
 
     use std::net::ToSocketAddrs;
