@@ -1,4 +1,5 @@
 use failure::Error;
+use messages::Messages;
 use rusqlite::Connection as SqlConnection;
 use std::collections::HashMap;
 use std::mem;
@@ -21,9 +22,12 @@ pub enum ConnectionError {
 
 pub struct Synac {
     pub addr: SocketAddr,
-    pub listener: Listener,
     pub session: Session,
-    pub state: State
+    pub listener: Listener,
+    pub state: State,
+
+    pub channel: Option<usize>,
+    pub messages: Messages
 }
 impl Synac {
     pub fn new(addr: SocketAddr, session: Session) -> Self {
@@ -31,7 +35,10 @@ impl Synac {
             addr: addr,
             listener: Listener::new(),
             session: session,
-            state: State::new()
+            state: State::new(),
+
+            channel: None,
+            messages: Messages::new()
         }
     }
 }
@@ -137,11 +144,11 @@ impl Connections {
     pub fn set_current(&self, addr: Option<SocketAddr>) {
         *self.current_server.lock().unwrap() = addr;
     }
-    pub fn execute<F>(&self, addr: &SocketAddr, callback: F)
+    pub fn execute<F>(&self, addr: SocketAddr, callback: F)
         where F: FnOnce(Result<&mut Synac, &mut Error>)
     {
         let mut servers = self.servers.lock().unwrap();
-        let server = servers.get_mut(addr);
+        let server = servers.get_mut(&addr);
 
         if let Some(inner) = server {
             callback(inner.join());
@@ -156,6 +163,11 @@ impl Connections {
                     let read = synac.listener.try_read(synac.session.inner_stream())?;
                     if let Some(packet) = read {
                         synac.state.update(&packet);
+                        if let Packet::MessageReceive(ref event) = packet {
+                            synac.messages.add(event.inner.clone());
+                        } else if let Packet::MessageDeleteReceive(ref msg) = packet {
+                            synac.messages.remove(msg.id);
+                        }
                         callback(synac, packet);
                     }
                 }
