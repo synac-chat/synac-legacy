@@ -211,10 +211,10 @@ impl Screen {
                 status(&mut stdout, 0);
             }
             while !text.is_empty() {
-                let indent_amount = if !first && indent.is_empty() {
+                if !first && indent.is_empty() {
                     indent = " ".repeat(indent_amount);
-                    indent_amount
-                } else { 0 };
+                }
+                let indent_amount = if first { 0 } else { indent_amount };
                 first = false;
 
                 text = &text[skip..];
