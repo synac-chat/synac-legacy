@@ -71,7 +71,7 @@ pub fn format(output: &mut String, timestamp: i64) {
         }
     }
     output.push_str(" at ");
-    let (is_am, hour) = local.hour12();
+    let (is_pm, hour) = local.hour12();
     write!(output, "{}:{:02} ", hour, local.minute()).unwrap();
-    output.push_str(if is_am { "AM" } else { "PM" });
+    output.push_str(if is_pm { "PM" } else { "AM" });
 }
