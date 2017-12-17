@@ -1,4 +1,5 @@
 #[macro_use] extern crate failure;
+extern crate chrono;
 extern crate gtk;
 extern crate rusqlite;
 extern crate synac;
@@ -17,7 +18,6 @@ use gtk::{
     DialogFlags,
     Entry,
     InputPurpose,
-    Justification,
     Label,
     Menu,
     MenuItem,
@@ -265,6 +265,7 @@ fn main() {
                 Packet::ChannelReceive(_)       => channels = true,
                 Packet::ChannelDeleteReceive(_) => channels = true,
                 Packet::MessageReceive(_)       => messages = true,
+                Packet::MessageDeleteReceive(_)       => messages = true,
                 _ => {}
             }
         }) {
@@ -464,14 +465,28 @@ fn render_messages(connection: Option<(&Arc<Connections>, SocketAddr)>, messages
                 if let Some(channel) = server.channel {
                     for msg in server.messages.get(channel) {
                         let msgbox = GtkBox::new(Orientation::Vertical, 2);
+                        let authorbox = GtkBox::new(Orientation::Horizontal, 4);
 
                         let author = Label::new(&*server.state.users[&msg.author].name);
-                        author.set_justify(Justification::Left);
                         author.set_xalign(0.0);
-                        msgbox.add(&author);
+                        authorbox.add(&author);
+
+                        authorbox.add(&Separator::new(Orientation::Horizontal));
+
+                        let mut time = String::with_capacity(32); // just a guess
+                        messages::format(&mut time, msg.timestamp);
+                        if let Some(edit) = msg.timestamp_edit {
+                            time.push_str(" (edited at ");
+                            messages::format(&mut time, edit);
+                            time.push_str(")");
+                        }
+                        let time = Label::new(&*time);
+                        time.set_xalign(0.0);
+                        authorbox.add(&time);
+
+                        msgbox.add(&authorbox);
 
                         let text = Label::new(&*String::from_utf8_lossy(&msg.text));
-                        text.set_justify(Justification::Left);
                         text.set_xalign(0.0);
                         msgbox.add(&text);
 

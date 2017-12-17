@@ -1,4 +1,6 @@
+use chrono::{Datelike, Local, Timelike, TimeZone, Utc};
 use std::collections::HashMap;
+use std::fmt::Write;
 use synac::common::Message;
 
 pub struct Messages {
@@ -15,28 +17,61 @@ impl Messages {
         let i = match messages.binary_search_by_key(&msg.timestamp, |msg| msg.timestamp) {
             Err(i) => i,
             Ok(mut i) => {
-                let original = Some(messages[i].timestamp);
+                let original_timestamp = Some(messages[i].timestamp);
+                let original_id = Some(messages[i].id);
+                while messages.get(i-1).map(|msg| msg.timestamp) == original_timestamp {
+                    i -= 1;
+                }
                 loop {
-                    i += 1;
-                    if messages.get(i).map(|msg| msg.timestamp) != original {
+                    let message = messages.get_mut(i);
+                    if message.as_ref().map(|msg| msg.id) == original_id {
+                        *message.unwrap() = msg;
+                        return;
+                    }
+                    if message.map(|msg| msg.timestamp) != original_timestamp {
                         break;
                     }
+                    i += 1
                 }
-                i
+                i+1
             }
         };
         messages.insert(i, msg);
     }
     pub fn remove(&mut self, id: usize) {
-        let messages = self.messages.get_mut(&id).unwrap();
-        if let Some(i) = messages.iter().position(|msg| msg.id == id) {
-            messages.remove(i);
+        for messages in self.messages.values_mut() {
+            if let Some(i) = messages.iter().position(|msg| msg.id == id) {
+                messages.remove(i);
+            }
         }
     }
-    pub fn get(&self, id: usize) -> &[Message] {
-        self.messages.get(&id).map(|inner| &*inner as &[Message]).unwrap_or(&[])
+    pub fn get(&self, channel: usize) -> &[Message] {
+        self.messages.get(&channel).map(|inner| &*inner as &[Message]).unwrap_or(&[])
     }
-    pub fn has(&self, id: usize) -> bool {
-        self.messages.contains_key(&id)
+    pub fn has(&self, channel: usize) -> bool {
+        self.messages.contains_key(&channel)
     }
+}
+
+pub fn format(output: &mut String, timestamp: i64) {
+    let time  = Utc.timestamp(timestamp, 0);
+    let local = time.with_timezone(&Local);
+    let now   = Local::now();
+    let diff  = now.signed_duration_since(local);
+
+    match diff.num_days() {
+        0 => output.push_str("Today"),
+        1 => output.push_str("Yesterday"),
+        2 => output.push_str("Two days ago"),
+        3 => output.push_str("Three days ago"),
+        x if x < 7 => output.push_str("A few days ago"),
+        7 => output.push_str("A week ago"),
+        _ => {
+            write!(output, "{}-{}-{}", local.year(), local.month(), local.day()).unwrap();
+        }
+    }
+    output.push_str(" at ");
+    let (is_am, hour) = local.hour12();
+    write!(output, "{}:{:02} ", hour, local.minute()).unwrap();
+    output.push_str(if is_am { "AM" } else { "PM" });
 }
