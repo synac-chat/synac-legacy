@@ -476,7 +476,7 @@ fn render_messages(connection: Option<(&Arc<Connections>, SocketAddr)>, messages
                         let mut time = String::with_capacity(32); // just a guess
                         messages::format(&mut time, msg.timestamp);
                         if let Some(edit) = msg.timestamp_edit {
-                            time.push_str(" (edited on ");
+                            time.push_str(" (edited ");
                             messages::format(&mut time, edit);
                             time.push_str(")");
                         }
