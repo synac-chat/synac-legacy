@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["jD91mZM2 <me@krake.one>"]
 
 [dependencies]
